@@ -1,0 +1,6 @@
+numpy
+astropy
+photutils
+emcee
+# exotic is needed only by post_run_check.py / indep_tmid.py
+# astrometry.net (solve-field + Tycho-2 index files) is needed by locate_target.py / check_inits.py
