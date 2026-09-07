@@ -19,6 +19,7 @@ after.
 | `check_inits.py` | does the inits file describe the right planet, in the right place, at the right time? | before starting EXOTIC |
 | `post_run_check.py` | is the reported Tmid uncertainty the posterior, or a replaced bar? | after EXOTIC finishes |
 | `indep_tmid.py` | what does an independent sampler get on the same detrended points? | called by `post_run_check.py`, or on its own |
+| `mobs_night.py` | all of the above, in order, from a target name and a date | one command per night |
 
 ## Install
 
@@ -154,6 +155,33 @@ number.
 `indep_tmid.py` is also useful on its own as an external reference for any fit:
 
     python3 indep_tmid.py inits.json output/working_artifacts/FinalLightCurve_X.csv [--free-baseline]
+
+## mobs_night.py
+
+One command from a MicroObservatory target name and UT date to a pre-flighted
+inits file, with the reduction as an option:
+
+    python3 mobs_night.py Qatar-1 260907 --planet "Qatar-1 b"
+    python3 mobs_night.py Qatar-1 260907 --planet "Qatar-1 b" --run
+
+It lists and downloads the night's frames from the MObs Image Directory,
+fetches the planet from the NASA Exoplanet Archive, computes the epoch and
+predicted mid-transit against the observing window (and stops if no transit is
+inside), plate-solves the first frame for the target pixel, triages the whole
+night, chooses comparison stars inside the triage box within a brightness
+factor of the target, writes the inits file from the archive values, pre-flights
+it with `check_inits.py`, writes a pre-registration scaffold with the expected
+Tmid uncertainty derived from a V-magnitude scatter calibration, and prints a
+verdict: PROCEED, or REJECT with the numbers (seed target too faint, too many
+in-transit frames lost, no usable comparison, pre-flight failure). `--run`
+launches EXOTIC detached with `post_run_check.py` appended, and refuses on a
+REJECT unless `--force`.
+
+The verdict is advisory and the pre-registration is a scaffold: the judgment
+lines are meant to be edited and committed before any fit runs. The tool does
+the mechanical part so that the part that needs a person is the only part left.
+Paths are relative to the repo it lives in (`data/`, `output/`, and the inits and
+prereg files one level up); `--data-dir` points it at frames already on disk.
 
 ## Provenance
 

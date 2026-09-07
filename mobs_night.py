@@ -1,0 +1,404 @@
+#!/usr/bin/env python3
+"""
+One command from a MicroObservatory target name and date to a pre-flighted
+EXOTIC inits file, with the reduction as an option.
+
+    python3 tools/mobs_night.py Qatar-1 260907 --planet "Qatar-1 b"
+    python3 tools/mobs_night.py Qatar-1 260907 --planet "Qatar-1 b" --run
+
+Steps, each of which is an existing tool in this directory:
+  1. list the night's frames on the MObs Image Directory and download the
+     missing ones (mo-www's certificate expired 2026-09-06; verification falls
+     back to off for that host, and says so)
+  2. archive parameters for the planet (NASA Exoplanet Archive, pscomppars)
+  3. observing window from the frame headers; epoch, predicted Tmid, ingress
+     and egress; baseline minutes either side; stop if no transit is inside
+  4. locate_target.py on the first frame: target pixel and comparison candidates
+  5. night_triage.py over the night: cloud, drift, comp box, phase split
+  6. choose comparisons inside the comp box within a brightness factor of the
+     target; write the inits file from the archive values
+  7. check_inits.py on the result
+  8. a pre-registration scaffold with the bar DERIVED from the V-magnitude
+     scatter calibration (0.84% at V 11.57 on 2026-09-05, photon scaling), for
+     editing and committing BEFORE any fit
+  9. a triage verdict: proceed or reject, with the numbers. With --run and a
+     proceed verdict, launch EXOTIC detached (setsid) with post_run_check.py
+     appended, exactly as the hand-written run scripts did.
+
+The verdict is advisory. The inits file is written either way; --run refuses on
+a reject verdict unless --force. Nothing here submits anything anywhere.
+"""
+import argparse, csv, io, json, math, os, re, ssl, subprocess, sys, urllib.parse, urllib.request
+from datetime import datetime, timezone
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, HERE)
+from night_triage import frame_time  # noqa: E402
+
+LISTING = 'https://waps.cfa.harvard.edu/microobservatory/MOImageDirectory/ImageDirectory.php?SortBy=Filename&SortPos=DESC'
+FITS_URL = 'https://mo-www.cfa.harvard.edu/ImageDirectory/{name}.FITS'
+TAP = 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?'
+SITE = {'lat': '+31.68', 'lon': '-110.88', 'elev': 1268}   # MObs, Whipple Observatory, Arizona
+# Calibration from 2026-09-05: WASP-11 b (archive V 11.57) gave 0.84% residual scatter at 60 s;
+# scatter/depth 0.42-0.43 gave Tmid bars of 6.6 and 9.8 min (KELT-23A, WASP-11) at ~3 min cadence.
+CAL_SCATTER, CAL_V, CAL_RATIO, CAL_BAR_MIN = 0.84, 11.57, 0.425, 8.2
+SEED_MIN_ADU = 300
+
+
+def say(s=''):
+    print(s, flush=True)
+
+
+# ---------------------------------------------------------------- 1. frames
+def listing_names(target, yymmdd):
+    html = urllib.request.urlopen(LISTING, timeout=90).read().decode(errors='ignore')
+    pat = re.compile(r'ImageDirectory/(' + re.escape(target) + yymmdd + r'\d{6})\.FITS')
+    return sorted(set(pat.findall(html)))
+
+
+def download(names, ddir):
+    os.makedirs(ddir, exist_ok=True)
+    ctx_ok = ssl.create_default_context()
+    ctx_no = ssl._create_unverified_context()
+    ctx, warned, got = ctx_ok, False, 0
+    for n in names:
+        dest = os.path.join(ddir, n + '.FITS')
+        if os.path.exists(dest) and os.path.getsize(dest) > 100000:
+            continue
+        url = FITS_URL.format(name=n)
+        for attempt in range(2):
+            try:
+                data = urllib.request.urlopen(url, timeout=120, context=ctx).read()
+                break
+            except urllib.error.URLError as e:
+                if 'CERTIFICATE' in str(e).upper() and ctx is ctx_ok:
+                    ctx = ctx_no
+                    if not warned:
+                        say('  mo-www certificate did not verify (expired 2026-09-06); continuing without verification for this host')
+                        warned = True
+                    continue
+                raise
+        open(dest, 'wb').write(data)
+        got += 1
+    return got
+
+
+# --------------------------------------------------------------- 2. archive
+def archive(planet):
+    cols = ('pl_name,hostname,pl_orbper,pl_orbpererr1,pl_tranmid,pl_tranmiderr1,pl_trandur,pl_ratror,pl_ratrorerr1,'
+            'pl_ratdor,pl_ratdorerr1,pl_orbincl,pl_orbinclerr1,pl_orbeccen,pl_orblper,st_teff,st_tefferr1,st_tefferr2,'
+            'st_met,st_meterr1,st_meterr2,st_logg,st_loggerr1,st_loggerr2,sy_dist,sy_pmra,sy_pmdec,sy_vmag,ra,dec')
+    q = f"select {cols} from pscomppars where pl_name='{planet}'"
+    url = TAP + urllib.parse.urlencode({'query': q, 'format': 'csv'})
+    rows = list(csv.DictReader(io.StringIO(urllib.request.urlopen(url, timeout=60).read().decode())))
+    if not rows:
+        raise SystemExit(f'archive: no pscomppars row for {planet!r} (try the alias: HAT-P-10 b is WASP-11 b)')
+    r = rows[0]
+    f = lambda k, d=None: float(r[k]) if r.get(k) not in (None, '', 'null') else d
+    return {
+        'planet': r['pl_name'], 'host': r['hostname'],
+        'P': f('pl_orbper'), 'Perr': f('pl_orbpererr1', 1e-6), 'T0': f('pl_tranmid'), 'T0err': f('pl_tranmiderr1', 1e-3),
+        'T14h': f('pl_trandur'), 'rprs': f('pl_ratror'), 'rprserr': f('pl_ratrorerr1', 0.005),
+        'ars': f('pl_ratdor'), 'arserr': f('pl_ratdorerr1', 0.2), 'inc': f('pl_orbincl'), 'incerr': f('pl_orbinclerr1', 0.5),
+        'ecc': f('pl_orbeccen', 0.0), 'omega': f('pl_orblper', 90.0),
+        'teff': f('st_teff'), 'teffp': f('st_tefferr1', 100.0), 'teffm': f('st_tefferr2', -100.0),
+        'met': f('st_met', 0.0), 'metp': f('st_meterr1', 0.1), 'metm': f('st_meterr2', -0.1),
+        'logg': f('st_logg', 4.5), 'loggp': f('st_loggerr1', 0.1), 'loggm': f('st_loggerr2', -0.1),
+        'dist': f('sy_dist'), 'pmra': f('sy_pmra', 0.0), 'pmdec': f('sy_pmdec', 0.0), 'V': f('sy_vmag'),
+        'ra': f('ra'), 'dec': f('dec'),
+    }
+
+
+def sexa(ra, dec):
+    h = ra / 15.0
+    hh = int(h); mm = int((h - hh) * 60); ss = ((h - hh) * 60 - mm) * 60
+    sgn = '+' if dec >= 0 else '-'; d = abs(dec)
+    dd = int(d); dm = int((d - dd) * 60); ds = ((d - dd) * 60 - dm) * 60
+    return f'{hh:02d}:{mm:02d}:{ss:05.2f}', f'{sgn}{dd:02d}:{dm:02d}:{ds:04.1f}'
+
+
+def ut(jd):
+    return (datetime(2000, 1, 1, 12, tzinfo=timezone.utc)
+            .__class__.fromtimestamp((jd - 2440587.5) * 86400, tz=timezone.utc)).strftime('%H:%M')
+
+
+# --------------------------------------------------------------- 3. timing
+def window(ddir):
+    from astropy.io import fits
+    files = sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS'))
+    h0, h1 = fits.getheader(os.path.join(ddir, files[0])), fits.getheader(os.path.join(ddir, files[-1]))
+    return files, frame_time(h0), frame_time(h1) + float(h1.get('EXPTIME', 60)) / 86400.0, h0
+
+
+# ---------------------------------------------------------------- helpers
+def run_tool(script, args, capture=True):
+    cmd = [sys.executable, os.path.join(HERE, script)] + args
+    r = subprocess.run(cmd, capture_output=True, text=True)
+    return r.returncode, r.stdout, r.stderr
+
+
+def parse_triage(text):
+    g = {}
+    m = re.search(r'comp box.*?x in \[(-?\d+), (-?\d+)\]\s+y in \[(-?\d+), (-?\d+)\]', text)
+    if m:
+        g['box'] = tuple(int(v) for v in m.groups())
+    m = re.search(r'clear reference (\d+) ADU.*?clear (\d+), partial (\d+), lost (\d+)', text)
+    if m:
+        g['clear_ref'], g['clear'], g['partial'], g['lost'] = (int(v) for v in m.groups())
+    m = re.search(r'shift range dx \[(-?\d+), (-?\d+)\]\s+dy \[(-?\d+), (-?\d+)\]', text)
+    if m:
+        g['shift'] = tuple(int(v) for v in m.groups())
+    for ph in ('pre', 'in', 'post'):
+        m = re.search(ph + r'\s+(\d+) frames: clear (\d+), partial (\d+), lost (\d+)', text)
+        if m:
+            g[ph] = tuple(int(v) for v in m.groups())
+    g['steps'] = len(re.findall(r'^\s+\S+: \([+-]\d+, [+-]\d+\)$', text, re.M))
+    return g
+
+
+def seed_above_bg(path, x, y):
+    from astropy.io import fits
+    from astropy.stats import sigma_clipped_stats
+    d = fits.getdata(path).astype(float)
+    _, med, _ = sigma_clipped_stats(d, sigma=3)
+    xi, yi = int(round(x)), int(round(y))
+    return float(d[max(0, yi - 2):yi + 3, max(0, xi - 2):xi + 3].max() - med), float(med)
+
+
+def choose_comps(cands, target_flux, box, lo, hi, n):
+    x0, x1, y0, y1 = box
+    inbox = [c for c in cands if x0 <= c['x'] <= x1 and y0 <= c['y'] <= y1]
+    ratio = lambda c: c['flux'] / target_flux if target_flux > 0 else float('inf')
+    good = [c for c in inbox if lo <= ratio(c) <= hi]
+    if good:
+        return good[:n], True
+    # nothing in range: nearest in log-brightness, flagged
+    inbox.sort(key=lambda c: abs(math.log10(max(ratio(c), 1e-6))))
+    return inbox[:n], False
+
+
+# ------------------------------------------------------------------- main
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument('target', help='MObs target name as in the listing, e.g. Qatar-1, WASP-2, HAT-P-10')
+    p.add_argument('yymmdd', help='UT night as in the filenames, e.g. 260907')
+    p.add_argument('--planet', required=True, help='archive planet name, e.g. "Qatar-1 b"')
+    p.add_argument('--data-root', default=os.path.join(ROOT, 'data'))
+    p.add_argument('--out-root', default=os.path.join(ROOT, 'output'))
+    p.add_argument('--ncomps', type=int, default=6)
+    p.add_argument('--ratio', default='0.15,8', help='comparison/target brightness range accepted')
+    p.add_argument('--run', action='store_true', help='launch EXOTIC detached if the verdict is proceed')
+    p.add_argument('--force', action='store_true', help='run even on a reject verdict')
+    p.add_argument('--no-download', action='store_true')
+    p.add_argument('--data-dir', help='use this existing frame directory instead of data/<target>_<date>')
+    a = p.parse_args()
+    lo, hi = (float(v) for v in a.ratio.split(','))
+
+    date = '20' + a.yymmdd
+    iso = f'{date[:4]}-{date[4:6]}-{date[6:]}'
+    slug = re.sub(r'[^a-z0-9]', '', a.planet.lower().replace(' b', '').replace(' ', ''))
+    ddir = a.data_dir or os.path.join(a.data_root, f'{a.target}_{date}')
+    odir = os.path.join(a.out_root, f'{slug}_{date}')
+    inits_path = os.path.join(ROOT, f'inits_{slug}_{date}.json')
+    prereg_path = os.path.join(ROOT, f'prereg_{slug}_{date}.md')
+    log_path = os.path.join(ROOT, f'{slug}_{date[4:]}_run.log')
+
+    # 1. frames
+    say(f'== {a.planet}: MObs {a.target} night {iso}')
+    if not a.no_download and not a.data_dir:
+        names = listing_names(a.target, a.yymmdd)
+        say(f'  listing: {len(names)} frames for {a.target}{a.yymmdd}')
+        if not names and not os.path.isdir(ddir):
+            raise SystemExit('  nothing to do')
+        got = download(names, ddir)
+        say(f'  downloaded {got} new frame(s) to {ddir}')
+    files, jd0, jd1, h0 = window(ddir)
+    say(f'  {len(files)} frames on disk, {ut(jd0)}-{ut(jd1)} UT, {h0.get("EXPTIME")} s {h0.get("FILTER")}')
+
+    # 2. archive
+    ar = archive(a.planet)
+    depth = 100 * ar['rprs'] ** 2
+    say(f'  archive: P {ar["P"]:.8f} d, T0 {ar["T0"]:.6f}, T14 {ar["T14h"]:.3f} h, Rp/Rs {ar["rprs"]:.4f} (depth {depth:.2f}%), V {ar["V"]}')
+
+    # 3. timing
+    n = round(((jd0 + jd1) / 2 - ar['T0']) / ar['P'])
+    tmid = ar['T0'] + n * ar['P']
+    half = ar['T14h'] / 48.0
+    ing, egr = tmid - half, tmid + half
+    pre_min, post_min = (ing - jd0) * 1440, (jd1 - egr) * 1440
+    eph_err_min = (ar['T0err'] + abs(n) * ar['Perr']) * 1440
+    say(f'  epoch {n}: Tmid {tmid:.5f} = {ut(tmid)} UT, ingress {ut(ing)}, egress {ut(egr)}; '
+        f'baseline pre {pre_min:.0f} min, post {post_min:.0f} min; ephemeris bar {eph_err_min:.1f} min')
+    if egr < jd0 or ing > jd1:
+        raise SystemExit('  no transit inside the window; nothing to reduce')
+    coverage = 'full' if ing > jd0 and egr < jd1 else ('ingress-only' if ing > jd0 else 'egress-only')
+
+    # 4. locate
+    first = os.path.join(ddir, files[0])
+    rc, out, err = run_tool('locate_target.py', [first, '--ra', str(ar['ra']), '--dec', str(ar['dec']), '--json', '--comps', '14'])
+    if rc != 0:
+        raise SystemExit(f'  locate_target failed: {err.strip()[-300:]}')
+    loc = json.loads(out)
+    tx, ty = loc['target']['x'], loc['target']['y']
+    above, bg = seed_above_bg(first, tx, ty)
+    say(f'  target in frame 1: ({tx:.1f}, {ty:.1f}), {above:.0f} ADU above a {bg:.0f} background'
+        + ('  SATURATED' if loc['target']['saturated'] else ''))
+
+    # 5. triage
+    rc, out, err = run_tool('night_triage.py', [ddir, '--x', str(tx), '--y', str(ty), '--tmid', f'{tmid:.5f}', '--t14', f'{ar["T14h"]:.4f}'])
+    if rc != 0:
+        raise SystemExit(f'  night_triage failed: {err.strip()[-300:]}')
+    open(os.path.join(ddir, 'triage.txt'), 'w').write(out)
+    tg = parse_triage(out)
+    say('  triage: ' + '; '.join(l for l in out.strip().splitlines() if l.startswith(('frames', 'shift', 'target flux'))))
+    for ph in ('pre', 'in', 'post'):
+        if ph in tg:
+            say(f'    {ph:4s} {tg[ph][0]:3d} frames: clear {tg[ph][1]}, partial {tg[ph][2]}, lost {tg[ph][3]}')
+    if tg['steps']:
+        say(f'    pointing steps > 25 px: {tg["steps"]}')
+
+    # 6. comps + inits
+    from astropy.io import fits
+    from photutils.aperture import CircularAperture, aperture_photometry
+    d0 = fits.getdata(first).astype(float)
+    tflux = float(aperture_photometry(d0 - bg, CircularAperture((tx, ty), r=5))['aperture_sum'][0])
+    for c in loc['comparisons']:
+        c['flux'] = float(aperture_photometry(d0 - bg, CircularAperture((c['x'], c['y']), r=5))['aperture_sum'][0])
+    box = tg.get('box', (16, 634, 16, 484))
+    comps, in_range = choose_comps(loc['comparisons'], tflux, box, lo, hi, a.ncomps)
+    say(f'  comps: {len(comps)} chosen in box x[{box[0]},{box[1]}] y[{box[2]},{box[3]}]'
+        + ('' if in_range else f'  NONE within {lo}-{hi}x of the target; nearest taken, flagged'))
+    for c in comps:
+        say(f'    ({c["x"]:6.1f}, {c["y"]:6.1f})  {c["flux"] / tflux if tflux > 0 else float("nan"):6.2f}x target')
+
+    ra_s, dec_s = sexa(ar['ra'], ar['dec'])
+    inits = {
+        'user_info': {
+            'Directory with FITS files': ddir, 'Directory to Save Plots': odir,
+            'Directory of Flats': None, 'Directory of Darks': None, 'Directory of Biases': None,
+            'AAVSO Observer Code (blank if none)': '', 'Secondary Observer Codes (blank if none)': 'MOBS',
+            'Observation date': iso, 'Obs. Latitude': SITE['lat'], 'Obs. Longitude': SITE['lon'], 'Obs. Elevation (meters)': SITE['elev'],
+            'Camera Type (CCD or DSLR)': 'CCD', 'Pixel Binning': '2x2', 'Filter Name (aavso.org/filters)': 'CV',
+            'Observing Notes': (f'MicroObservatory public Image Directory. {len(files)} frames {ut(jd0)}-{ut(jd1)} UT. '
+                                f'Triage (tools/night_triage.py): clear {tg.get("clear")}, partial {tg.get("partial")}, lost {tg.get("lost")}; '
+                                f'shift range dx {tg.get("shift", ("?",) * 4)[:2]} dy {tg.get("shift", ("?",) * 4)[2:]} px. '
+                                f'Seed from a local plate solve of frame 1; comps chosen to stay on the chip through the full shift range. '
+                                f'Archive ephemeris Tmid {tmid:.5f} ({ut(tmid)} UT), {coverage} transit. '
+                                f'Pre-registered (prereg_{slug}_{date}.md). Reduced by Opus (AI); not submitted.'),
+            'Plate Solution? (y/n)': 'n', 'Add Comparison Stars from AAVSO? (y/n)': 'n',
+            'Target Star X & Y Pixel': [int(round(tx)), int(round(ty))],
+            'Comparison Star(s) X & Y Pixel': [[int(round(c['x'])), int(round(c['y']))] for c in comps],
+            'Demosaic Format': None, 'Demosaic Output': None,
+        },
+        'planetary_parameters': {
+            'Target Star RA': ra_s, 'Target Star Dec': dec_s, 'Planet Name': ar['planet'], 'Host Star Name': ar['host'],
+            'Orbital Period (days)': ar['P'], 'Orbital Period Uncertainty': ar['Perr'],
+            'Published Mid-Transit Time (BJD-UTC)': ar['T0'], 'Mid-Transit Time Uncertainty': ar['T0err'],
+            'Ratio of Planet to Stellar Radius (Rp/Rs)': ar['rprs'], 'Ratio of Planet to Stellar Radius (Rp/Rs) Uncertainty': ar['rprserr'],
+            'Ratio of Distance to Stellar Radius (a/Rs)': ar['ars'], 'Ratio of Distance to Stellar Radius (a/Rs) Uncertainty': ar['arserr'],
+            'Orbital Inclination (deg)': ar['inc'], 'Orbital Inclination (deg) Uncertainty': ar['incerr'],
+            'Orbital Eccentricity (0 if null)': ar['ecc'], 'Argument of Periastron (deg)': ar['omega'],
+            'Star Effective Temperature (K)': ar['teff'], 'Star Effective Temperature (+) Uncertainty': ar['teffp'], 'Star Effective Temperature (-) Uncertainty': ar['teffm'],
+            'Star Metallicity ([FE/H])': ar['met'], 'Star Metallicity (+) Uncertainty': ar['metp'], 'Star Metallicity (-) Uncertainty': ar['metm'],
+            'Star Surface Gravity (log(g))': ar['logg'], 'Star Surface Gravity (+) Uncertainty': ar['loggp'], 'Star Surface Gravity (-) Uncertainty': ar['loggm'],
+            'Star Distance (pc)': ar['dist'], 'Star Proper Motion RA (mas/yr)': ar['pmra'], 'Star Proper Motion DEC (mas/yr)': ar['pmdec'],
+        },
+        'optional_info': {
+            'Pre-reduced File:': '', 'Pre-reduced File Time Format (BJD_TDB, JD_UTC, MJD_UTC)': 'BJD_TDB',
+            'Pre-reduced File Units of Flux (flux, magnitude, millimagnitude)': 'flux',
+            'Filter Minimum Wavelength (nm)': 350, 'Filter Maximum Wavelength (nm)': 850,
+            'Image Scale (Ex: 5.21 arcsecs/pixel)': None, 'Exposure Time (s)': float(h0.get('EXPTIME', 60)),
+        },
+    }
+    if os.path.exists(inits_path):
+        inits_path = inits_path.replace('.json', '.auto.json')
+        say('  an inits file for this night already exists; writing the generated one beside it')
+    json.dump(inits, open(inits_path, 'w'), indent=2)
+    say(f'  wrote {os.path.relpath(inits_path, ROOT)}')
+
+    # 7. pre-flight
+    rc, out, err = run_tool('check_inits.py', [inits_path])
+    say('  check_inits: ' + ('PASS' if rc == 0 else f'FAIL (exit {rc})'))
+    for line in out.strip().splitlines():
+        if '[FAIL]' in line or '[look]' in line:
+            say('    ' + line.strip())
+
+    # 8. prereg scaffold (never overwrite)
+    scatter = CAL_SCATTER * 10 ** (0.2 * (ar['V'] - CAL_V)) if ar['V'] else None
+    bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN if scatter else None
+    if not os.path.exists(prereg_path):
+        open(prereg_path, 'w').write(f"""# Pre-registration: {ar['planet']}, MicroObservatory night of {iso} UT
+
+SCAFFOLD from tools/mobs_night.py. Edit the judgment lines, then commit BEFORE any fit.
+
+Frames: {len(files)}, {ut(jd0)} to {ut(jd1)} UT, {h0.get('EXPTIME')} s {h0.get('FILTER')}.
+Archive (NEA pscomppars, fetched {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC): P {ar['P']:.8f} +/- {ar['Perr']:.1e} d,
+T0 {ar['T0']:.6f} +/- {ar['T0err']:.1e}, T14 {ar['T14h']:.3f} h, Rp/Rs {ar['rprs']:.4f} (depth {depth:.2f}%), a/Rs {ar['ars']},
+inc {ar['inc']}, e {ar['ecc']}, Teff {ar['teff']}, V {ar['V']}. Epoch {n}: predicted Tmid {tmid:.5f} ({ut(tmid)} UT),
+ingress {ut(ing)}, egress {ut(egr)}; {pre_min:.0f} min pre-ingress and {post_min:.0f} min post-egress in the window
+({coverage}). Propagated ephemeris bar {eph_err_min:.1f} min.
+
+Predictions:
+- Sky judged by stars per frame and the target's aperture flux (night_triage), not the background.
+  If the counts hold through {ut(ing)}-{ut(egr)} and the seed target is >{SEED_MIN_ADU} ADU above background:
+  QC PASS or MARGINAL (not predicting which).   [EDIT: state which if there is a reason]
+- Scatter, from the V-magnitude calibration ({CAL_SCATTER}% at V {CAL_V} on 2026-09-05, photon scaling):
+  ~{scatter:.2f}%. On a {depth:.2f}% depth that is scatter/depth {scatter / depth:.2f}; with {CAL_RATIO} giving
+  {CAL_BAR_MIN} min at ~3 min cadence, expected Tmid bar ~{bar:.0f} min (range {0.8 * bar:.0f}-{1.3 * bar:.0f}).
+  Under {0.6 * bar:.0f} min: calibration wrong the other way. Over {1.8 * bar:.0f} min: worse night than the counts show.
+- Tmid within 1 sigma (that bar) of {tmid:.5f}.   [EDIT: what a miss would and would not mean]
+- Depth within 1 sigma of {depth:.2f}%; Rp/Rs within 1 sigma of {ar['rprs']:.4f}.
+- If stars-per-frame falls by more than half at any point between {ut(ing)} and {ut(egr)}, or the target is under
+  ~{SEED_MIN_ADU} ADU above background in the seed frame: expect FAIL or a rejected night, and the record will say so
+  with no depth or timing claim.
+- Any printed bar under 0.001 d is a replaced bar (#1401) and gets refit before the ledger.
+- First-frame coordinates from a local plate solve; drift by star-pair voting; comps in the triage box within a
+  brightness factor of the target; #1409 confirms the rest.
+- Not submitted regardless; checkpoint holds.
+""")
+        say(f'  wrote {os.path.relpath(prereg_path, ROOT)} (scaffold; EDIT and commit before any fit)')
+    else:
+        say(f'  prereg exists, left alone: {os.path.relpath(prereg_path, ROOT)}')
+
+    # 9. verdict
+    reasons = []
+    if above < SEED_MIN_ADU:
+        reasons.append(f'seed target {above:.0f} ADU above background (< {SEED_MIN_ADU})')
+    if 'in' in tg and tg['in'][0] and tg['in'][3] / tg['in'][0] > 0.5:
+        reasons.append(f'in-transit frames lost {tg["in"][3]}/{tg["in"][0]}')
+    if 'in' in tg and (tg['in'][1] + tg['in'][2]) < 10:
+        reasons.append(f'only {tg["in"][1] + tg["in"][2]} usable in-transit frames')
+    if not in_range:
+        reasons.append(f'no comparison within {lo}-{hi}x of the target')
+    if rc != 0:
+        reasons.append('check_inits failed')
+    verdict = 'REJECT' if reasons else 'PROCEED'
+    say(f'== verdict: {verdict}' + (': ' + '; '.join(reasons) if reasons else ''))
+    if bar:
+        say(f'   derived expectation if clear: scatter ~{scatter:.2f}%, Tmid bar ~{bar:.0f} min')
+
+    # --run
+    if a.run:
+        if verdict == 'REJECT' and not a.force:
+            say('   --run refused on a REJECT verdict (use --force to override)')
+            return 1
+        script = os.path.join(ROOT, f'{slug}_{date[4:]}_run.sh')
+        rel = os.path.relpath(inits_path, ROOT)
+        open(script, 'w').write(f"""#!/bin/bash
+cd {ROOT}
+echo "=== {ar['planet']} {date} run start $(date -u +%FT%TZ) ===" >> {os.path.basename(log_path)}
+venv/bin/exotic -red {rel} -ov >> {os.path.basename(log_path)} 2>&1
+echo "=== {ar['planet']} {date} run end $(date -u +%FT%TZ) exit=$? ===" >> {os.path.basename(log_path)}
+venv/bin/python tools/post_run_check.py {rel} >> {os.path.basename(log_path)} 2>&1
+echo "=== post_run_check exit=$? ===" >> {os.path.basename(log_path)}
+""")
+        os.chmod(script, 0o755)
+        subprocess.Popen(['setsid', 'nohup', script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        say(f'   launched detached: {os.path.basename(script)} -> {os.path.basename(log_path)}; '
+            f'wait for "post_run_check exit" in the log')
+    return 0 if verdict == 'PROCEED' else 1
+
+
+if __name__ == '__main__':
+    sys.exit(main())
