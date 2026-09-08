@@ -18,10 +18,10 @@ Steps, each of which is an existing tool in this directory:
   6. choose comparisons inside the comp box within a brightness factor of the
      target; write the inits file from the archive values
   7. check_inits.py on the result
-  8. a pre-registration scaffold with the bar DERIVED from the V-magnitude
+  9. a pre-registration scaffold (PROCEED only) with the bar DERIVED from the V-magnitude
      scatter calibration (0.84% at V 11.57 on 2026-09-05, photon scaling), for
      editing and committing BEFORE any fit
-  9. a triage verdict: proceed or reject, with the numbers. With --run and a
+  8. a triage verdict: proceed or reject, with the numbers. With --run and a
      proceed verdict, launch EXOTIC detached (setsid) with post_run_check.py
      appended, exactly as the hand-written run scripts did.
 
@@ -35,7 +35,7 @@ from datetime import datetime, timezone
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-from night_triage import frame_time  # noqa: E402
+from night_triage import frame_time, detect, voted_shift  # noqa: E402
 
 LISTING = 'https://waps.cfa.harvard.edu/microobservatory/MOImageDirectory/ImageDirectory.php?SortBy=Filename&SortPos=DESC'
 FITS_URL = 'https://mo-www.cfa.harvard.edu/ImageDirectory/{name}.FITS'
@@ -126,21 +126,24 @@ def ut(jd):
 
 # --------------------------------------------------------------- 3. timing
 SATURATED_SKY = 2500   # median sky above this is dusk or dawn: the chip is saturated, not observing
+MIN_SEED_STARS = 10    # a seed frame needs a star field; twilight frames have a few or none
 
 
-def set_aside_saturated(ddir):
-    """Move dusk/dawn-saturated frames to <ddir>/excluded so that neither the plate
-    solve nor EXOTIC seeds from one. WASP-80 2026-09-08: frame 1 was sky 4095 across
-    the chip and the solve failed on it; the real first frame was 22 minutes later."""
-    from astropy.io import fits
+def set_aside_unusable(ddir):
+    """Move LEADING frames that cannot seed a reduction (dusk-saturated, or twilight
+    with fewer than MIN_SEED_STARS detections) to <ddir>/excluded, stopping at the
+    first usable frame. Mid-night cloud is left alone; EXOTIC handles that itself.
+    WASP-80 2026-09-08: frames 1-2 were sky 4095 across the chip and frames 3-4
+    were twilight with no usable stars; the real first frame was 22 minutes in."""
     import shutil
     moved = []
     for f in sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS')):
-        d = fits.getdata(os.path.join(ddir, f))
-        if float(np.median(d)) > SATURATED_SKY:
-            os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
-            shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
-            moved.append(f)
+        data, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
+        if med <= SATURATED_SKY and len(xy) >= MIN_SEED_STARS:
+            break
+        os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
+        shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
+        moved.append(f)
     return moved
 
 
@@ -233,9 +236,9 @@ def main():
             raise SystemExit('  nothing to do')
         got = download(names, ddir)
         say(f'  downloaded {got} new frame(s) to {ddir}')
-    moved = set_aside_saturated(ddir)
+    moved = set_aside_unusable(ddir)
     if moved:
-        say(f'  set aside {len(moved)} saturated (dusk/dawn) frame(s) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
+        say(f'  set aside {len(moved)} leading unusable (saturated or twilight) frame(s) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
     files, jd0, jd1, h0 = window(ddir)
     if not files:
         raise SystemExit('  no usable frames')
@@ -259,13 +262,30 @@ def main():
         raise SystemExit('  no transit inside the window; nothing to reduce')
     coverage = 'full' if ing > jd0 and egr < jd1 else ('ingress-only' if ing > jd0 else 'egress-only')
 
-    # 4. locate
+    # 4. locate: frame 1, or the first of the next few that solves, with the pixel
+    #    carried back to frame 1 by the star-pair vote (EXOTIC seeds from frame 1)
     first = os.path.join(ddir, files[0])
-    rc, out, err = run_tool('locate_target.py', [first, '--ra', str(ar['ra']), '--dec', str(ar['dec']), '--json', '--comps', '14'])
-    if rc != 0:
-        raise SystemExit(f'  locate_target failed: {err.strip()[-300:]}')
-    loc = json.loads(out)
+    loc, solved_on = None, None
+    for i in range(min(6, len(files))):
+        rc, out, err = run_tool('locate_target.py', [os.path.join(ddir, files[i]), '--ra', str(ar['ra']), '--dec', str(ar['dec']), '--json', '--comps', '14'])
+        if rc == 0:
+            loc, solved_on = json.loads(out), i
+            break
+    if loc is None:
+        raise SystemExit(f'  no frame among the first {min(6, len(files))} would plate-solve; last error: {err.strip()[-200:]}')
     tx, ty = loc['target']['x'], loc['target']['y']
+    if solved_on:
+        _, _, xy0, fl0 = detect(first, 4.0, 8.0)
+        _, _, xyi, fli = detect(os.path.join(ddir, files[solved_on]), 4.0, 8.0)
+        ref = xy0[np.argsort(fl0)[::-1][:25]] if len(xy0) else xy0
+        cur = xyi[np.argsort(fli)[::-1][:25]] if len(xyi) else xyi
+        sh, votes = voted_shift(cur, ref)
+        if sh is None:
+            raise SystemExit(f'  frame 1 did not solve and could not be aligned to frame {solved_on + 1} (votes {votes}); no seed pixel')
+        tx, ty = tx - float(sh[0]), ty - float(sh[1])
+        for c in loc['comparisons']:
+            c['x'], c['y'] = c['x'] - float(sh[0]), c['y'] - float(sh[1])
+        say(f'  frame 1 did not solve; solved frame {solved_on + 1} ({files[solved_on]}) and carried the pixel back by ({-sh[0]:+.1f}, {-sh[1]:+.1f}) on {votes} votes')
     above, bg = seed_above_bg(first, tx, ty)
     say(f'  target in frame 1: ({tx:.1f}, {ty:.1f}), {above:.0f} ADU above a {bg:.0f} background'
         + ('  SATURATED' if loc['target']['saturated'] else ''))
@@ -349,10 +369,30 @@ def main():
         if '[FAIL]' in line or '[look]' in line:
             say('    ' + line.strip())
 
-    # 8. prereg scaffold (never overwrite)
     scatter = CAL_SCATTER * 10 ** (0.2 * (ar['V'] - CAL_V)) if ar['V'] else None
     bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN if scatter else None
-    if not os.path.exists(prereg_path):
+
+    # 8. verdict
+    reasons = []
+    if above < SEED_MIN_ADU:
+        reasons.append(f'seed target {above:.0f} ADU above background (< {SEED_MIN_ADU})')
+    if 'in' in tg and tg['in'][0] and tg['in'][3] / tg['in'][0] > 0.5:
+        reasons.append(f'in-transit frames lost {tg["in"][3]}/{tg["in"][0]}')
+    if 'in' in tg and (tg['in'][1] + tg['in'][2]) < 10:
+        reasons.append(f'only {tg["in"][1] + tg["in"][2]} usable in-transit frames')
+    if not in_range:
+        reasons.append(f'no comparison within {lo}-{hi}x of the target')
+    if rc != 0:
+        reasons.append('check_inits failed')
+    verdict = 'REJECT' if reasons else 'PROCEED'
+    say(f'== verdict: {verdict}' + (': ' + '; '.join(reasons) if reasons else ''))
+    if bar:
+        say(f'   derived expectation if clear: scatter ~{scatter:.2f}%, Tmid bar ~{bar:.0f} min')
+
+    # 9. prereg scaffold (PROCEED only; never overwrite)
+    if verdict == 'REJECT':
+        say('  no prereg scaffold written for a rejected night')
+    elif not os.path.exists(prereg_path):
         open(prereg_path, 'w').write(f"""# Pre-registration: {ar['planet']}, MicroObservatory night of {iso} UT
 
 SCAFFOLD from tools/mobs_night.py. Edit the judgment lines, then commit BEFORE any fit.
@@ -385,23 +425,6 @@ Predictions:
         say(f'  wrote {os.path.relpath(prereg_path, ROOT)} (scaffold; EDIT and commit before any fit)')
     else:
         say(f'  prereg exists, left alone: {os.path.relpath(prereg_path, ROOT)}')
-
-    # 9. verdict
-    reasons = []
-    if above < SEED_MIN_ADU:
-        reasons.append(f'seed target {above:.0f} ADU above background (< {SEED_MIN_ADU})')
-    if 'in' in tg and tg['in'][0] and tg['in'][3] / tg['in'][0] > 0.5:
-        reasons.append(f'in-transit frames lost {tg["in"][3]}/{tg["in"][0]}')
-    if 'in' in tg and (tg['in'][1] + tg['in'][2]) < 10:
-        reasons.append(f'only {tg["in"][1] + tg["in"][2]} usable in-transit frames')
-    if not in_range:
-        reasons.append(f'no comparison within {lo}-{hi}x of the target')
-    if rc != 0:
-        reasons.append('check_inits failed')
-    verdict = 'REJECT' if reasons else 'PROCEED'
-    say(f'== verdict: {verdict}' + (': ' + '; '.join(reasons) if reasons else ''))
-    if bar:
-        say(f'   derived expectation if clear: scatter ~{scatter:.2f}%, Tmid bar ~{bar:.0f} min')
 
     # --run
     if a.run:
