@@ -29,6 +29,7 @@ The verdict is advisory. The inits file is written either way; --run refuses on
 a reject verdict unless --force. Nothing here submits anything anywhere.
 """
 import argparse, csv, io, json, math, os, re, ssl, subprocess, sys, urllib.parse, urllib.request
+import numpy as np
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -124,6 +125,25 @@ def ut(jd):
 
 
 # --------------------------------------------------------------- 3. timing
+SATURATED_SKY = 2500   # median sky above this is dusk or dawn: the chip is saturated, not observing
+
+
+def set_aside_saturated(ddir):
+    """Move dusk/dawn-saturated frames to <ddir>/excluded so that neither the plate
+    solve nor EXOTIC seeds from one. WASP-80 2026-09-08: frame 1 was sky 4095 across
+    the chip and the solve failed on it; the real first frame was 22 minutes later."""
+    from astropy.io import fits
+    import shutil
+    moved = []
+    for f in sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS')):
+        d = fits.getdata(os.path.join(ddir, f))
+        if float(np.median(d)) > SATURATED_SKY:
+            os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
+            shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
+            moved.append(f)
+    return moved
+
+
 def window(ddir):
     from astropy.io import fits
     files = sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS'))
@@ -213,7 +233,12 @@ def main():
             raise SystemExit('  nothing to do')
         got = download(names, ddir)
         say(f'  downloaded {got} new frame(s) to {ddir}')
+    moved = set_aside_saturated(ddir)
+    if moved:
+        say(f'  set aside {len(moved)} saturated (dusk/dawn) frame(s) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
     files, jd0, jd1, h0 = window(ddir)
+    if not files:
+        raise SystemExit('  no usable frames')
     say(f'  {len(files)} frames on disk, {ut(jd0)}-{ut(jd1)} UT, {h0.get("EXPTIME")} s {h0.get("FILTER")}')
 
     # 2. archive
