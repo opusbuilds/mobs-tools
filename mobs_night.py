@@ -125,26 +125,42 @@ def ut(jd):
 
 
 # --------------------------------------------------------------- 3. timing
-SATURATED_SKY = 2500   # median sky above this is dusk or dawn: the chip is saturated, not observing
-MIN_SEED_STARS = 10    # a seed frame needs a star field; twilight frames have a few or none
+TWILIGHT_SKY = 1000    # median sky above this is dusk or dawn, not a night frame. Calibrated on
+                       # WASP-80 2026-09-08: dusk frames read 4095, 3197, 1692; the first usable
+                       # frame read 718 with 85 stars; the night settled at 430-500
+MIN_SEED_STARS = 10    # a seed frame needs a star field to plate-solve and to vote with
 
 
-def set_aside_unusable(ddir):
-    """Move LEADING frames that cannot seed a reduction (dusk-saturated, or twilight
-    with fewer than MIN_SEED_STARS detections) to <ddir>/excluded, stopping at the
-    first usable frame. Mid-night cloud is left alone; EXOTIC handles that itself.
-    WASP-80 2026-09-08: frames 1-2 were sky 4095 across the chip and frames 3-4
-    were twilight with no usable stars; the real first frame was 22 minutes in."""
+def set_aside_twilight(ddir):
+    """Move LEADING twilight frames (median sky above TWILIGHT_SKY) to <ddir>/excluded,
+    stopping at the first night frame. These are not observations of anything and must
+    not seed a reduction or be counted in the triage. WASP-80 2026-09-08: frames 1-3
+    were dusk; the real first frame was 16 minutes in.
+
+    A leading frame with a night-dark sky and few or no stars is NOT set aside here:
+    that is cloud or an empty low field, and it belongs in the triage as a lost frame.
+    WASP-50 2026-09-09: the first 41 frames (07:33-09:33 UT, two hours) had 0-9 stars
+    on a 402-414 ADU sky and were set aside as "twilight" by the old star-count rule,
+    which hid the whole clouded pre-ingress stretch from the triage counts."""
     import shutil
     moved = []
     for f in sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS')):
         data, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
-        if med <= SATURATED_SKY and len(xy) >= MIN_SEED_STARS:
+        if med <= TWILIGHT_SKY:
             break
         os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
         shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
         moved.append(f)
     return moved
+
+
+def first_seedable_frame(ddir, files):
+    """Index of the first frame with at least MIN_SEED_STARS detections, else 0."""
+    for i, f in enumerate(files):
+        _, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
+        if med <= TWILIGHT_SKY and len(xy) >= MIN_SEED_STARS:
+            return i
+    return 0
 
 
 def window(ddir):
@@ -236,9 +252,9 @@ def main():
             raise SystemExit('  nothing to do')
         got = download(names, ddir)
         say(f'  downloaded {got} new frame(s) to {ddir}')
-    moved = set_aside_unusable(ddir)
+    moved = set_aside_twilight(ddir)
     if moved:
-        say(f'  set aside {len(moved)} leading unusable (saturated or twilight) frame(s) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
+        say(f'  set aside {len(moved)} leading twilight frame(s) (sky above {TWILIGHT_SKY} ADU) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
     files, jd0, jd1, h0 = window(ddir)
     if not files:
         raise SystemExit('  no usable frames')
@@ -265,15 +281,20 @@ def main():
     # 4. locate: frame 1, or the first of the next few that solves, with the pixel
     #    carried back to frame 1 by the star-pair vote (EXOTIC seeds from frame 1)
     first = os.path.join(ddir, files[0])
+    start = first_seedable_frame(ddir, files)
+    if start:
+        say(f'  first {start} frame(s) have fewer than {MIN_SEED_STARS} stars on a night-dark sky (cloud or an empty field); '
+            f'seeding from frame {start + 1} ({files[start]}) and grading them in the triage')
     loc, solved_on = None, None
-    for i in range(min(6, len(files))):
+    for i in range(start, min(start + 6, len(files))):
         rc, out, err = run_tool('locate_target.py', [os.path.join(ddir, files[i]), '--ra', str(ar['ra']), '--dec', str(ar['dec']), '--json', '--comps', '14'])
         if rc == 0:
             loc, solved_on = json.loads(out), i
             break
     if loc is None:
-        raise SystemExit(f'  no frame among the first {min(6, len(files))} would plate-solve; last error: {err.strip()[-200:]}')
+        raise SystemExit(f'  no frame among {start + 1}-{min(start + 6, len(files))} would plate-solve; last error: {err.strip()[-200:]}')
     tx, ty = loc['target']['x'], loc['target']['y']
+    ref_frame = 0
     if solved_on:
         _, _, xy0, fl0 = detect(first, 4.0, 8.0)
         _, _, xyi, fli = detect(os.path.join(ddir, files[solved_on]), 4.0, 8.0)
@@ -281,17 +302,24 @@ def main():
         cur = xyi[np.argsort(fli)[::-1][:25]] if len(xyi) else xyi
         sh, votes = voted_shift(cur, ref)
         if sh is None:
-            raise SystemExit(f'  frame 1 did not solve and could not be aligned to frame {solved_on + 1} (votes {votes}); no seed pixel')
-        tx, ty = tx - float(sh[0]), ty - float(sh[1])
-        for c in loc['comparisons']:
-            c['x'], c['y'] = c['x'] - float(sh[0]), c['y'] - float(sh[1])
-        say(f'  frame 1 did not solve; solved frame {solved_on + 1} ({files[solved_on]}) and carried the pixel back by ({-sh[0]:+.1f}, {-sh[1]:+.1f}) on {votes} votes')
-    above, bg = seed_above_bg(first, tx, ty)
-    say(f'  target in frame 1: ({tx:.1f}, {ty:.1f}), {above:.0f} ADU above a {bg:.0f} background'
+            # Frame 1 cannot be aligned (too few stars). Keep the pixel on the solved
+            # frame, triage relative to it, and set the unseedable leading frames aside
+            # AFTER the triage so they are counted as lost rather than hidden.
+            ref_frame = solved_on
+            say(f'  frame 1 could not be aligned to frame {solved_on + 1} (votes {votes}); the pixel refers to frame {solved_on + 1}')
+        else:
+            tx, ty = tx - float(sh[0]), ty - float(sh[1])
+            for c in loc['comparisons']:
+                c['x'], c['y'] = c['x'] - float(sh[0]), c['y'] - float(sh[1])
+            say(f'  frame 1 did not solve; solved frame {solved_on + 1} ({files[solved_on]}) and carried the pixel back by ({-sh[0]:+.1f}, {-sh[1]:+.1f}) on {votes} votes')
+    seed_file = os.path.join(ddir, files[ref_frame])
+    above, bg = seed_above_bg(seed_file, tx, ty)
+    say(f'  target in frame {ref_frame + 1}: ({tx:.1f}, {ty:.1f}), {above:.0f} ADU above a {bg:.0f} background'
         + ('  SATURATED' if loc['target']['saturated'] else ''))
 
     # 5. triage
-    rc, out, err = run_tool('night_triage.py', [ddir, '--x', str(tx), '--y', str(ty), '--tmid', f'{tmid:.5f}', '--t14', f'{ar["T14h"]:.4f}'])
+    rc, out, err = run_tool('night_triage.py', [ddir, '--x', str(tx), '--y', str(ty), '--tmid', f'{tmid:.5f}', '--t14', f'{ar["T14h"]:.4f}',
+                                                '--ref-frame', str(ref_frame)])
     if rc != 0:
         raise SystemExit(f'  night_triage failed: {err.strip()[-300:]}')
     open(os.path.join(ddir, 'triage.txt'), 'w').write(out)
@@ -302,11 +330,20 @@ def main():
             say(f'    {ph:4s} {tg[ph][0]:3d} frames: clear {tg[ph][1]}, partial {tg[ph][2]}, lost {tg[ph][3]}')
     if tg['steps']:
         say(f'    pointing steps > 25 px: {tg["steps"]}')
+    if ref_frame:
+        # Now that they have been counted, move the leading frames EXOTIC could not
+        # seed from out of the way, so a reduction (if any) starts at the seed frame.
+        import shutil
+        os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
+        for f in files[:ref_frame]:
+            shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
+        say(f'  set aside the {ref_frame} leading star-poor frame(s) to excluded/ for seeding only; they are counted above as lost')
+        files = files[ref_frame:]
 
     # 6. comps + inits
     from astropy.io import fits
     from photutils.aperture import CircularAperture, aperture_photometry
-    d0 = fits.getdata(first).astype(float)
+    d0 = fits.getdata(seed_file).astype(float)
     tflux = float(aperture_photometry(d0 - bg, CircularAperture((tx, ty), r=5))['aperture_sum'][0])
     for c in loc['comparisons']:
         c['flux'] = float(aperture_photometry(d0 - bg, CircularAperture((c['x'], c['y']), r=5))['aperture_sum'][0])
@@ -328,7 +365,7 @@ def main():
             'Observing Notes': (f'MicroObservatory public Image Directory. {len(files)} frames {ut(jd0)}-{ut(jd1)} UT. '
                                 f'Triage (tools/night_triage.py): clear {tg.get("clear")}, partial {tg.get("partial")}, lost {tg.get("lost")}; '
                                 f'shift range dx {tg.get("shift", ("?",) * 4)[:2]} dy {tg.get("shift", ("?",) * 4)[2:]} px. '
-                                f'Seed from a local plate solve of frame 1; comps chosen to stay on the chip through the full shift range. '
+                                f'Seed from a local plate solve of frame {solved_on + 1 if solved_on else 1}' + (f' ({ref_frame} leading star-poor frames set aside after triage)' if ref_frame else '') + '; comps chosen to stay on the chip through the full shift range. '
                                 f'Archive ephemeris Tmid {tmid:.5f} ({ut(tmid)} UT), {coverage} transit. '
                                 f'Pre-registered (prereg_{slug}_{date}.md). Reduced by Opus (AI); not submitted.'),
             'Plate Solution? (y/n)': 'n', 'Add Comparison Stars from AAVSO? (y/n)': 'n',

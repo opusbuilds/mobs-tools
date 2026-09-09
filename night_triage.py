@@ -78,8 +78,12 @@ def frame_time(hdr):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('directory')
-    p.add_argument('--x', type=float, required=True, help='target x in the FIRST frame')
-    p.add_argument('--y', type=float, required=True, help='target y in the FIRST frame')
+    p.add_argument('--x', type=float, required=True, help='target x in the reference frame (the first, unless --ref-frame)')
+    p.add_argument('--y', type=float, required=True, help='target y in the reference frame (the first, unless --ref-frame)')
+    p.add_argument('--ref-frame', type=int, default=0,
+                   help='0-based index of the frame the target pixel and the shifts refer to. Use it when the '
+                        'first frame has too few stars to vote with (cloud or an empty low field), so the '
+                        'star-poor leading frames are graded lost instead of aborting the triage')
     p.add_argument('--tmid', type=float, help='predicted mid-transit, JD')
     p.add_argument('--t14', type=float, help='transit duration, hours')
     p.add_argument('--fwhm', type=float, default=4.0)
@@ -91,8 +95,12 @@ def main():
     files = sorted(glob.glob(f'{a.directory}/*.FITS') + glob.glob(f'{a.directory}/*.fits') + glob.glob(f'{a.directory}/*.fit'))
     if not files:
         raise SystemExit('no frames found')
-    data0, _, xy0, fl0 = detect(files[0], a.fwhm, a.nsigma)
+    if not 0 <= a.ref_frame < len(files):
+        raise SystemExit(f'--ref-frame {a.ref_frame} is outside the {len(files)} frames found')
+    data0, _, xy0, fl0 = detect(files[a.ref_frame], a.fwhm, a.nsigma)
     ref = xy0[np.argsort(fl0)[::-1][:a.ref_stars]]
+    if a.ref_frame:
+        print(f'reference frame {a.ref_frame + 1} ({files[a.ref_frame].split("/")[-1]}); shifts are relative to it')
     shape = data0.shape
     tgt = np.array([a.x, a.y])
     rows = []
@@ -111,7 +119,7 @@ def main():
     fluxes = np.array([r[5] for r in rows])
     good = fluxes[np.isfinite(fluxes)]
     if len(good) == 0:
-        raise SystemExit('no frame could be aligned to the first frame')
+        raise SystemExit('no frame could be aligned to the reference frame')
     clear_ref = np.median(np.sort(good)[-max(3, len(good) // 4):])
 
     def grade(fl):
