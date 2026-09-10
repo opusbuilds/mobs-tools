@@ -95,6 +95,11 @@ def main():
              ('Ratio of Distance to Stellar Radius (a/Rs)', 'pl_ratdor', 0.15),
              ('Orbital Inclination (deg)', 'pl_orbincl', 0.02)]
     for key, col, tol in pairs:
+        if a.get(col) in (None, '', 'null'):
+            # pscomppars does not always carry the column (TOI-2570 b, 2026-09-10: no pl_ratror);
+            # nothing to compare against is a skip, not a failure and not a crash.
+            print(f'  [skip] {key.split(" (")[0]}  archive has no {col}; inits {p.get(key)}')
+            continue
         mine, theirs = p.get(key), float(a[col])
         rel = abs(mine - theirs) / theirs
         check(rel <= tol, key.split(' (')[0], f'inits {mine}  archive {theirs}  ({rel * 100:.2f}% off)')

@@ -65,7 +65,8 @@ def download(names, ddir):
     ctx, warned, got = ctx_ok, False, 0
     for n in names:
         dest = os.path.join(ddir, n + '.FITS')
-        if os.path.exists(dest) and os.path.getsize(dest) > 100000:
+        aside = os.path.join(ddir, 'excluded', n + '.FITS')   # set aside on an earlier run; still present
+        if any(os.path.exists(d) and os.path.getsize(d) > 100000 for d in (dest, aside)):
             continue
         url = FITS_URL.format(name=n)
         for attempt in range(2):
@@ -89,7 +90,8 @@ def download(names, ddir):
 def archive(planet):
     cols = ('pl_name,hostname,pl_orbper,pl_orbpererr1,pl_tranmid,pl_tranmiderr1,pl_trandur,pl_ratror,pl_ratrorerr1,'
             'pl_ratdor,pl_ratdorerr1,pl_orbincl,pl_orbinclerr1,pl_orbeccen,pl_orblper,st_teff,st_tefferr1,st_tefferr2,'
-            'st_met,st_meterr1,st_meterr2,st_logg,st_loggerr1,st_loggerr2,sy_dist,sy_pmra,sy_pmdec,sy_vmag,ra,dec')
+            'st_met,st_meterr1,st_meterr2,st_logg,st_loggerr1,st_loggerr2,sy_dist,sy_pmra,sy_pmdec,sy_vmag,ra,dec,'
+            'pl_radj,st_rad,pl_trandep')
     q = f"select {cols} from pscomppars where pl_name='{planet}'"
     url = TAP + urllib.parse.urlencode({'query': q, 'format': 'csv'})
     rows = list(csv.DictReader(io.StringIO(urllib.request.urlopen(url, timeout=60).read().decode())))
@@ -97,10 +99,19 @@ def archive(planet):
         raise SystemExit(f'archive: no pscomppars row for {planet!r} (try the alias: HAT-P-10 b is WASP-11 b)')
     r = rows[0]
     f = lambda k, d=None: float(r[k]) if r.get(k) not in (None, '', 'null') else d
+    # pscomppars does not always carry pl_ratror (TOI-2570 b, 2026-09-10, had radii and a
+    # depth but no ratio); derive it rather than fail, and say where it came from.
+    rprs, rprs_from = f('pl_ratror'), 'pl_ratror'
+    if rprs is None and f('pl_radj') and f('st_rad'):
+        rprs, rprs_from = f('pl_radj') * 0.10045 / f('st_rad'), 'pl_radj / st_rad'
+    if rprs is None and f('pl_trandep'):
+        rprs, rprs_from = math.sqrt(f('pl_trandep') / 100.0), 'sqrt(pl_trandep)'
+    if rprs is None:
+        raise SystemExit(f'archive: no Rp/Rs, radii or depth for {planet!r} in pscomppars')
     return {
         'planet': r['pl_name'], 'host': r['hostname'],
         'P': f('pl_orbper'), 'Perr': f('pl_orbpererr1', 1e-6), 'T0': f('pl_tranmid'), 'T0err': f('pl_tranmiderr1', 1e-3),
-        'T14h': f('pl_trandur'), 'rprs': f('pl_ratror'), 'rprserr': f('pl_ratrorerr1', 0.005),
+        'T14h': f('pl_trandur'), 'rprs': rprs, 'rprs_from': rprs_from, 'rprserr': f('pl_ratrorerr1', 0.005),
         'ars': f('pl_ratdor'), 'arserr': f('pl_ratdorerr1', 0.2), 'inc': f('pl_orbincl'), 'incerr': f('pl_orbinclerr1', 0.5),
         'ecc': f('pl_orbeccen', 0.0), 'omega': f('pl_orblper', 90.0),
         'teff': f('st_teff'), 'teffp': f('st_tefferr1', 100.0), 'teffm': f('st_tefferr2', -100.0),
@@ -155,12 +166,18 @@ def set_aside_twilight(ddir):
 
 
 def first_seedable_frame(ddir, files):
-    """Index of the first frame with at least MIN_SEED_STARS detections, else 0."""
+    """(index of the first frame with at least MIN_SEED_STARS detections, per-frame star counts).
+
+    The index is None when no frame qualifies: a night with 0-2 stars in every
+    frame (TrES-5 2026-09-10) is a verdict, not a plate-solving problem.
+    """
+    counts, first = [], None
     for i, f in enumerate(files):
         _, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
-        if med <= TWILIGHT_SKY and len(xy) >= MIN_SEED_STARS:
-            return i
-    return 0
+        counts.append((len(xy), med))
+        if first is None and med <= TWILIGHT_SKY and len(xy) >= MIN_SEED_STARS:
+            first = i
+    return first, counts
 
 
 def window(ddir):
@@ -264,7 +281,7 @@ def main():
     # 2. archive
     ar = archive(a.planet)
     depth = 100 * ar['rprs'] ** 2
-    say(f'  archive: P {ar["P"]:.8f} d, T0 {ar["T0"]:.6f}, T14 {ar["T14h"]:.3f} h, Rp/Rs {ar["rprs"]:.4f} (depth {depth:.2f}%), V {ar["V"]}')
+    say(f'  archive: P {ar["P"]:.8f} d, T0 {ar["T0"]:.6f}, T14 {ar["T14h"]:.3f} h, Rp/Rs {ar["rprs"]:.4f} (depth {depth:.2f}%), V {ar["V"]}' + ('' if ar['rprs_from'] == 'pl_ratror' else f' (Rp/Rs derived from {ar["rprs_from"]}; no pl_ratror in pscomppars)'))
 
     # 3. timing
     n = round(((jd0 + jd1) / 2 - ar['T0']) / ar['P'])
@@ -282,7 +299,15 @@ def main():
     # 4. locate: frame 1, or the first of the next few that solves, with the pixel
     #    carried back to frame 1 by the star-pair vote (EXOTIC seeds from frame 1)
     first = os.path.join(ddir, files[0])
-    start = first_seedable_frame(ddir, files)
+    start, counts = first_seedable_frame(ddir, files)
+    if start is None:
+        stars = [c[0] for c in counts]; skies = [c[1] for c in counts]
+        say(f'  no frame has {MIN_SEED_STARS} stars on a night-dark sky: {len(files)} frames, '
+            f'{min(stars)}-{max(stars)} stars (median {int(np.median(stars))}), sky {min(skies):.0f}-{max(skies):.0f} ADU/px; '
+            f'nothing to seed from, so nothing to solve')
+        say(f'== verdict: REJECT: every frame star-poor ({min(stars)}-{max(stars)} stars); '
+            f'transit window {ut(ing)}-{ut(egr)} UT inside a {ut(jd0)}-{ut(jd1)} night')
+        raise SystemExit(1)
     if start:
         say(f'  first {start} frame(s) have fewer than {MIN_SEED_STARS} stars on a night-dark sky (cloud or an empty field); '
             f'seeding from frame {start + 1} ({files[start]}) and grading them in the triage')
