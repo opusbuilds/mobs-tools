@@ -228,6 +228,7 @@ def main():
     p.add_argument('--ncomps', type=int, default=6)
     p.add_argument('--ratio', default='0.15,8', help='comparison/target brightness range accepted')
     p.add_argument('--run', action='store_true', help='launch EXOTIC detached if the verdict is proceed')
+    p.add_argument('--no-pf', action='store_true', help="skip EXOTIC's own pre-flight (exotic -pf), the slow plate-solving step")
     p.add_argument('--force', action='store_true', help='run even on a reject verdict')
     p.add_argument('--no-download', action='store_true')
     p.add_argument('--data-dir', help='use this existing frame directory instead of data/<target>_<date>')
@@ -399,12 +400,29 @@ def main():
     json.dump(inits, open(inits_path, 'w'), indent=2)
     say(f'  wrote {os.path.relpath(inits_path, ROOT)}')
 
-    # 7. pre-flight
+    # 7. pre-flight: this directory's check, then EXOTIC's own (exotic -pf, upstream
+    #    since 2026-09-10: archive agreement, transit in window, seed pixel against a
+    #    plate solution, comps on-frame and unsaturated). The second one plate-solves
+    #    a frame, so it is the slow part; skip it with --no-pf.
+    retained = sum(1 for f in os.listdir(ddir) if f.upper().endswith('.FITS'))
+    aside = len(os.listdir(os.path.join(ddir, 'excluded'))) if os.path.isdir(os.path.join(ddir, 'excluded')) else 0
+    if aside:
+        say(f'  pre-flight runs on the {retained} retained frame(s); the {aside} in excluded/ are outside its window, '
+            'so a transit-in-window FAIL below can be the set-aside, not the sky')
     rc, out, err = run_tool('check_inits.py', [inits_path])
     say('  check_inits: ' + ('PASS' if rc == 0 else f'FAIL (exit {rc})'))
     for line in out.strip().splitlines():
         if '[FAIL]' in line or '[look]' in line:
             say('    ' + line.strip())
+    pf_rc = 0
+    if not a.no_pf:
+        exotic_bin = os.path.join(ROOT, 'venv', 'bin', 'exotic')
+        r = subprocess.run([exotic_bin, '-pf', inits_path], capture_output=True, text=True, cwd=ROOT)
+        pf_rc = r.returncode
+        say('  exotic -pf: ' + ('PASS' if pf_rc == 0 else f'FAIL (exit {pf_rc})'))
+        for line in (r.stdout + r.stderr).splitlines():
+            if re.search(r'\[(FAIL|look|skip)', line):
+                say('    ' + line.strip())
 
     scatter = CAL_SCATTER * 10 ** (0.2 * (ar['V'] - CAL_V)) if ar['V'] else None
     bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN if scatter else None
@@ -421,6 +439,8 @@ def main():
         reasons.append(f'no comparison within {lo}-{hi}x of the target')
     if rc != 0:
         reasons.append('check_inits failed')
+    if pf_rc != 0:
+        reasons.append('exotic -pf failed')
     verdict = 'REJECT' if reasons else 'PROCEED'
     say(f'== verdict: {verdict}' + (': ' + '; '.join(reasons) if reasons else ''))
     if bar:

@@ -103,7 +103,9 @@ night is worth reducing.
 listing and download (with the mo-www certificate fallback), archive lookup,
 window and epoch, `locate_target`, `night_triage`, comparison choice inside the
 triage box within a brightness factor, the inits file from archive values,
-`check_inits`, a pre-registration scaffold with the Tmid bar DERIVED from the
+`check_inits`, then EXOTIC's own pre-flight (`exotic -pf`, in EXOTIC since
+2026-09-10; `--no-pf` skips it, it is the slow plate-solving step), a
+pre-registration scaffold with the Tmid bar DERIVED from the
 V-magnitude calibration (0.84% at V 11.57, WASP-11 2026-09-05), and a verdict.
 
     venv/bin/python tools/mobs_night.py Qatar-1 260907 --planet "Qatar-1 b"
