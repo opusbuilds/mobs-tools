@@ -97,6 +97,25 @@ Passing this is necessary, not sufficient. It says the file describes the right
 planet in the right place at the right time. It says nothing about whether the
 night is worth reducing.
 
+# Scanning the night before opening it
+
+`mobs_scan.py` reads the MicroObservatory Image Directory for one UT night and,
+for every target with ten or more frames that resolves to a planet at the NASA
+Exoplanet Archive (HATP-17 -> HAT-P-17 b, TOI2570 -> TOI-2570 b, TRES-5 ->
+TrES-5 b, aliases through the archive lookup service), prints the window from
+the filename timestamps against the predicted ingress, mid and egress: full,
+ingress-only, egress-only or NONE, with the baseline either side, the
+propagated ephemeris bar, V and depth. Nothing is downloaded. The nights worth
+opening come out as ready `mobs_night.py` commands.
+
+    venv/bin/python tools/mobs_scan.py            # last night (today UT)
+    venv/bin/python tools/mobs_scan.py 260911
+
+Added 2026-09-11 after WASP-10 on that night turned out, 29 frames later, to be
+a slot that ended 84 minutes before ingress. Archive answers are cached per
+target name in `.mobs_scan_cache.json`, so a scan costs one listing fetch plus
+one query per new name.
+
 # One command for a night
 
 `mobs_night.py` chains everything below in the order a night actually needs it:
