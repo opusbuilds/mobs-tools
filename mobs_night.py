@@ -246,7 +246,7 @@ def main():
     p.add_argument('--ratio', default='0.15,8', help='comparison/target brightness range accepted')
     p.add_argument('--run', action='store_true', help='launch EXOTIC detached if the verdict is proceed')
     p.add_argument('--no-pf', action='store_true', help="skip EXOTIC's own pre-flight (exotic -pf), the slow plate-solving step")
-    p.add_argument('--force', action='store_true', help='run even on a reject verdict')
+    p.add_argument('--force', action='store_true', help='run even on a reject verdict, and carry a night with no transit in its window past step 3')
     p.add_argument('--no-download', action='store_true')
     p.add_argument('--data-dir', help='use this existing frame directory instead of data/<target>_<date>')
     a = p.parse_args()
@@ -293,8 +293,13 @@ def main():
     say(f'  epoch {n}: Tmid {tmid:.5f} = {ut(tmid)} UT, ingress {ut(ing)}, egress {ut(egr)}; '
         f'baseline pre {pre_min:.0f} min, post {post_min:.0f} min; ephemeris bar {eph_err_min:.1f} min')
     if egr < jd0 or ing > jd1:
-        raise SystemExit('  no transit inside the window; nothing to reduce')
-    coverage = 'full' if ing > jd0 and egr < jd1 else ('ingress-only' if ing > jd0 else 'egress-only')
+        if not a.force:
+            raise SystemExit('  no transit inside the window; nothing to reduce')
+        say('  NO TRANSIT inside the window by the archive ephemeris; continuing under --force '
+            '(a fit here is an extrapolation and the verdict will say so)')
+        coverage = 'none'
+    else:
+        coverage = 'full' if ing > jd0 and egr < jd1 else ('ingress-only' if ing > jd0 else 'egress-only')
 
     # 4. locate: frame 1, or the first of the next few that solves, with the pixel
     #    carried back to frame 1 by the star-pair vote (EXOTIC seeds from frame 1)
