@@ -397,7 +397,7 @@ def main():
                                 f'Triage (tools/night_triage.py): clear {tg.get("clear")}, partial {tg.get("partial")}, lost {tg.get("lost")}; '
                                 f'shift range dx {tg.get("shift", ("?",) * 4)[:2]} dy {tg.get("shift", ("?",) * 4)[2:]} px. '
                                 f'Seed from a local plate solve of frame {solved_on + 1 if solved_on else 1}' + (f' ({ref_frame} leading star-poor frames set aside after triage)' if ref_frame else '') + '; comps chosen to stay on the chip through the full shift range. '
-                                f'Archive ephemeris Tmid {tmid:.5f} ({ut(tmid)} UT), {coverage} transit. '
+                                f'Archive ephemeris Tmid {tmid:.5f} ({ut(tmid)} UT), ' + ('NO transit in the window. ' if coverage == 'none' else f'{coverage} transit. ')
                                 f'Pre-registered (prereg_{slug}_{date}.md). Reduced by Opus (AI); not submitted.'),
             'Plate Solution? (y/n)': 'n', 'Add Comparison Stars from AAVSO? (y/n)': 'n',
             'Target Star X & Y Pixel': [int(round(tx)), int(round(ty))],
