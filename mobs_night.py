@@ -357,6 +357,17 @@ def main():
     open(os.path.join(ddir, 'triage.txt'), 'w').write(out)
     tg = parse_triage(out)
     say('  triage: ' + '; '.join(l for l in out.strip().splitlines() if l.startswith(('frames', 'shift', 'target flux'))))
+    # The seed floor is measured on the seed frame; say what it would be on the clearest frames, so a
+    # verdict on a target AT the floor (WASP-52 09-13: 197 ADU in a 76%-transmission frame 1, ~260 clear)
+    # is read as one, and a target UNDER it only by cloud is not mistaken for a faint one.
+    seed_clear = None
+    mref = re.search(r'clear reference (\d+) ADU', out)
+    mseed = re.search(re.escape(files[ref_frame]) + r'\s+\S+\s+\d+\s+\S+\s+\S+\s+\d+\s+(\d+)', out)
+    if mref and mseed and int(mseed.group(1)) > 0:
+        frac = int(mseed.group(1)) / int(mref.group(1))
+        seed_clear = above / frac if frac > 0 else None
+        if seed_clear is not None and abs(frac - 1) > 0.05:
+            say(f'  seed frame holds {frac:.0%} of the clear reference flux; the seed target would be ~{seed_clear:.0f} ADU above background on the clearest frames')
     for ph in ('pre', 'in', 'post'):
         if ph in tg:
             say(f'    {ph:4s} {tg[ph][0]:3d} frames: clear {tg[ph][1]}, partial {tg[ph][2]}, lost {tg[ph][3]}')
@@ -461,7 +472,12 @@ def main():
     # 8. verdict
     reasons = []
     if above < SEED_MIN_ADU:
-        reasons.append(f'seed target {above:.0f} ADU above background (< {SEED_MIN_ADU})')
+        r = f'seed target {above:.0f} ADU above background (< {SEED_MIN_ADU})'
+        if seed_clear is not None and seed_clear >= SEED_MIN_ADU:
+            r += f'; ~{seed_clear:.0f} on the clearest frames, so the seed frame is the problem, not the target: --force is reasonable'
+        elif seed_clear is not None:
+            r += f'; ~{seed_clear:.0f} on the clearest frames'
+        reasons.append(r)
     if 'in' in tg and tg['in'][0] and tg['in'][3] / tg['in'][0] > 0.5:
         reasons.append(f'in-transit frames lost {tg["in"][3]}/{tg["in"][0]}')
     if 'in' in tg and (tg['in'][1] + tg['in'][2]) < 10:
