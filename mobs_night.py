@@ -37,6 +37,20 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from night_triage import frame_time, detect, voted_shift  # noqa: E402
 
+def _urlopen_retry(url, timeout, tries=2):
+    """The NASA Exoplanet Archive occasionally stalls for a full timeout and then
+    answers the next request in two seconds (first seen 2026-09-13 from the home
+    box). One retry covers it; a second failure is a real outage."""
+    import time
+    for i in range(tries):
+        try:
+            return urllib.request.urlopen(url, timeout=timeout)
+        except (TimeoutError, OSError) as e:
+            if i == tries - 1:
+                raise
+            time.sleep(3)
+
+
 LISTING = 'https://waps.cfa.harvard.edu/microobservatory/MOImageDirectory/ImageDirectory.php?SortBy=Filename&SortPos=DESC'
 FITS_URL = 'https://mo-www.cfa.harvard.edu/ImageDirectory/{name}.FITS'
 TAP = 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?'
@@ -100,7 +114,7 @@ def archive(planet):
             'pl_radj,st_rad,pl_trandep')
     q = f"select {cols} from pscomppars where pl_name='{planet}'"
     url = TAP + urllib.parse.urlencode({'query': q, 'format': 'csv'})
-    rows = list(csv.DictReader(io.StringIO(urllib.request.urlopen(url, timeout=60).read().decode())))
+    rows = list(csv.DictReader(io.StringIO(_urlopen_retry(url, 60).read().decode())))
     if not rows:
         raise SystemExit(f'archive: no pscomppars row for {planet!r} (try the alias: HAT-P-10 b is WASP-11 b)')
     r = rows[0]

@@ -23,6 +23,20 @@ Nothing here downloads a frame or submits anything anywhere.
 import json, os, re, sys, urllib.parse, urllib.request, collections
 from datetime import datetime, timezone
 
+def _urlopen_retry(url, timeout, tries=2):
+    """The NASA Exoplanet Archive occasionally stalls for a full timeout and then
+    answers the next request in two seconds (first seen 2026-09-13 from the home
+    box). One retry covers it; a second failure is a real outage."""
+    import time
+    for i in range(tries):
+        try:
+            return urllib.request.urlopen(url, timeout=timeout)
+        except (TimeoutError, OSError) as e:
+            if i == tries - 1:
+                raise
+            time.sleep(3)
+
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 LISTING = 'https://waps.cfa.harvard.edu/microobservatory/MOImageDirectory/ImageDirectory.php?SortBy=Filename&SortPos=DESC'
 TAP = 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?'
@@ -62,7 +76,7 @@ def candidates(name):
 
 def tap(q):
     url = TAP + urllib.parse.urlencode({'query': q, 'format': 'json'})
-    return json.loads(urllib.request.urlopen(url, timeout=60).read().decode() or '[]')
+    return json.loads(_urlopen_retry(url, 60).read().decode() or '[]')
 
 
 COLS = 'pl_name,hostname,pl_orbper,pl_orbpererr1,pl_tranmid,pl_tranmiderr1,pl_trandur,pl_ratror,pl_trandep,pl_radj,st_rad,sy_vmag'

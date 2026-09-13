@@ -23,6 +23,20 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
+def _urlopen_retry(url, timeout, tries=2):
+    """The NASA Exoplanet Archive occasionally stalls for a full timeout and then
+    answers the next request in two seconds (first seen 2026-09-13 from the home
+    box). One retry covers it; a second failure is a real outage."""
+    import time
+    for i in range(tries):
+        try:
+            return urllib.request.urlopen(url, timeout=timeout)
+        except (TimeoutError, OSError) as e:
+            if i == tries - 1:
+                raise
+            time.sleep(3)
+
+
 warnings.filterwarnings('ignore')
 TAP = 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?'
 FAILED = []
@@ -44,7 +58,7 @@ def archive(planet):
     cols = ('pl_orbper,pl_tranmid,pl_ratror,pl_ratdor,pl_orbincl,ra,dec,sy_vmag,pl_trandur,default_flag')
     q = f"select {cols} from ps where pl_name='{planet}'"
     url = TAP + urllib.parse.urlencode({'query': q, 'format': 'csv'})
-    rows = list(csv.DictReader(io.StringIO(urllib.request.urlopen(url, timeout=60).read().decode())))
+    rows = list(csv.DictReader(io.StringIO(_urlopen_retry(url, 60).read().decode())))
     if not rows:
         return None
     merged = {}
