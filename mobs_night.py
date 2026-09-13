@@ -49,6 +49,8 @@ CAL_SCATTER, CAL_V, CAL_RATIO, CAL_BAR_MIN = 0.84, 11.57, 0.425, 8.2
 # 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
 # 8 min Tmid bar. One night; the number moves again on the next one that bears on it.
 SEED_MIN_ADU = 200
+# KAF-1402ME as listed for MicroObservatory on science.nasa.gov/citizen-science/exoplanet-watch/how-to-contribute/how-to-submit-your-data/
+MOBS_NOISE = {'gain': 53.6, 'read_noise': 15.0, 'dark': 15.0}
 
 
 def say(s=''):
@@ -438,6 +440,12 @@ def main():
             'Pre-reduced File Units of Flux (flux, magnitude, millimagnitude)': 'flux',
             'Filter Minimum Wavelength (nm)': 350, 'Filter Maximum Wavelength (nm)': 850,
             'Image Scale (Ex: 5.21 arcsecs/pixel)': None, 'Exposure Time (s)': float(h0.get('EXPTIME', 60)),
+            # MicroObservatory noise budget (KAF-1402ME), from NASA's Exoplanet Watch 'How to Submit Your Data'
+            # page. MObs headers carry no gain key, and EXOTIC's default is 1 e-/ADU, which puts every ADU in
+            # as one photon and inflates the per-point error bars (2026-09-13: WASP-52 b per-point 2.65% at
+            # gain 1 against a 1.81% residual scatter).
+            'gain_electrons_per_adu': MOBS_NOISE['gain'], 'read_noise_electrons': MOBS_NOISE['read_noise'],
+            'dark_current_electrons_per_second_per_pixel': MOBS_NOISE['dark'],
         },
     }
     if os.path.exists(inits_path):
