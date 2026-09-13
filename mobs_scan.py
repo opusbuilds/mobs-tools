@@ -100,6 +100,13 @@ def main():
         by[name].append(hms)
     cache = json.load(open(CACHE)) if os.path.exists(CACHE) else {}
     print(f'MObs {yymmdd}: {len(by)} target names in the listing, {sum(len(v) for v in by.values())} frames')
+    # The MObs night in Arizona runs until dawn, ~12:00-13:30 UT depending on season. A scan of TODAY's UT
+    # date made before then sees a night still in progress: on 2026-09-13 the 09:07 UT scan showed 35 of
+    # TOI-3693's eventual 102 frames, and the night was rejected as ingress-only on that partial listing.
+    now = datetime.now(timezone.utc)
+    if yymmdd == now.strftime('%y%m%d') and now.hour < 14:
+        print(f'  NOTE: scanned at {now:%H:%M} UT on the same UT date; the MObs night runs until ~13:30 UT, so this '
+              f'listing may still be growing. Do not reject a night on geometry from it; re-scan after 14:00 UT.')
     lines, worth = [], []
     for name, hms in sorted(by.items()):
         if len(hms) < MIN_FRAMES:
@@ -133,9 +140,11 @@ def main():
             rprs = r['pl_radj'] * 0.10045 / r['st_rad']
         depth = f'{100 * rprs ** 2:.2f}%' if rprs else (f'{r["pl_trandep"]:.2f}%' if r['pl_trandep'] else '?')
         v = f'V {r["sy_vmag"]:.2f}' if r['sy_vmag'] else 'V ?'
+        last_dt = datetime.fromtimestamp((j1 - 2440587.5) * 86400, tz=timezone.utc)
+        growing = yymmdd == now.strftime('%y%m%d') and now.hour < 14 and (now - last_dt).total_seconds() < 3 * 3600
         line = (f'  {name:12s} {len(hms):3d} frames  {ut(j0)}-{ut(j1)} UT  {r["pl_name"]:14s} '
                 f'ingress {ut(ing)} mid {ut(tmid)} egress {ut(egr)}  {cov:12s} pre {pre:+.0f} post {post:+.0f} min  '
-                f'bar {bar:.0f} min  {v}  depth {depth}')
+                f'bar {bar:.0f} min  {v}  depth {depth}' + ('  [last frame < 3 h ago: still running?]' if growing else ''))
         lines.append(line)
         if cov != 'NONE':
             worth.append(f'  venv/bin/python tools/mobs_night.py {name} {yymmdd} --planet "{r["pl_name"]}"')
