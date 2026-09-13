@@ -44,7 +44,11 @@ SITE = {'lat': '+31.68', 'lon': '-110.88', 'elev': 1268}   # MObs, Whipple Obser
 # Calibration from 2026-09-05: WASP-11 b (archive V 11.57) gave 0.84% residual scatter at 60 s;
 # scatter/depth 0.42-0.43 gave Tmid bars of 6.6 and 9.8 min (KELT-23A, WASP-11) at ~3 min cadence.
 CAL_SCATTER, CAL_V, CAL_RATIO, CAL_BAR_MIN = 0.84, 11.57, 0.425, 8.2
-SEED_MIN_ADU = 300
+# Seed floor, peak pixel above background in the seed frame. Set at 300 from the nights that failed
+# (WASP-80 34 ADU, Qatar-1 39, TrES-5); lowered to 200 on 2026-09-13 when WASP-52 b (197 ADU in a
+# 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
+# 8 min Tmid bar. One night; the number moves again on the next one that bears on it.
+SEED_MIN_ADU = 200
 
 
 def say(s=''):
