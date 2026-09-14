@@ -403,13 +403,64 @@ def main():
         say(f'  set aside the {ref_frame} leading star-poor frame(s) to excluded/ for seeding only; they are counted above as lost')
         files = files[ref_frame:]
 
+    # Leading clouded frames (2026-09-14, Qatar-1 09-14): frame 1 had 33 stars, so it
+    # counted as seedable, yet the target held 5% of its clear flux (23 ADU against
+    # ~446 clear): thin cloud that leaves stars detectable and a faint target gone.
+    # EXOTIC seeds from the first file, so a target invisible there fails the
+    # reduction regardless of the night. When the seed is under the floor only by
+    # cloud, set aside the LEADING run of frames the triage grades lost (they carry
+    # no photometry anyway, and they stay counted above), re-reference the seed
+    # pixel to the first surviving frame by the triage's own shift, and measure the
+    # floor there. Before this the tool only SAID "the seed frame is the problem".
+    # Per-frame rows from the triage table: (file, dx, dy, tflux, grade), shifts relative to the seed frame.
+    rows = []
+    for line in out.splitlines():
+        m = re.match(r'(\S+\.FITS)\s+\S+\s+\d+\s+(\S+)\s+(\S+)\s+\d+\s+(\S+)\s+\d+\s+(clear|partial|lost)$', line.strip())
+        if m:
+            num = lambda v: float(v) if v != '?' else None
+            rows.append((m.group(1), num(m.group(2)), num(m.group(3)), num(m.group(4)), m.group(5)))
+    if above < SEED_MIN_ADU and seed_clear is not None and seed_clear >= SEED_MIN_ADU:
+        lead = 0
+        while lead < len(rows) - 1 and rows[lead][4] == 'lost':
+            lead += 1
+        if lead and rows[lead][1] is not None:
+            import shutil
+            os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
+            for name, *_ in rows[:lead]:
+                if os.path.exists(os.path.join(ddir, name)):
+                    shutil.move(os.path.join(ddir, name), os.path.join(ddir, 'excluded', name))
+            dx, dy = rows[lead][1], rows[lead][2]
+            tx, ty = tx + dx, ty + dy
+            for c in loc['comparisons']:
+                c['x'], c['y'] = c['x'] + dx, c['y'] + dy
+            gone = {r[0] for r in rows[:lead]}
+            files = [f for f in files if f not in gone]
+            rows = [(r[0], None if r[1] is None else r[1] - dx, None if r[2] is None else r[2] - dy, r[3], r[4]) for r in rows[lead:]]
+            seed_file = os.path.join(ddir, files[0]); first = seed_file; ref_frame = 0
+            above, bg = seed_above_bg(seed_file, tx, ty)
+            say(f'  set aside the {lead} leading lost frame(s) (stars present, target extinguished) to excluded/; '
+                f'seeding from {files[0]} at ({tx:.1f}, {ty:.1f}), {above:.0f} ADU above a {bg:.0f} background')
+
     # 6. comps + inits
     from astropy.io import fits
     from photutils.aperture import CircularAperture, aperture_photometry
-    d0 = fits.getdata(seed_file).astype(float)
-    tflux = float(aperture_photometry(d0 - bg, CircularAperture((tx, ty), r=5))['aperture_sum'][0])
+    # Ratios on the CLEAREST frame (2026-09-14): measured on a clouded seed frame the
+    # target reads dim and a 25-ADU nothing passes as a "0.3x comparison". The triage
+    # table names the frame with the most target flux and its shift from the seed.
+    from astropy.stats import sigma_clipped_stats
+    best = max((r for r in rows if r[3] is not None and r[1] is not None), key=lambda r: r[3], default=None)
+    cx_off, cy_off, ratio_frame = (best[1], best[2], os.path.join(ddir, best[0])) if best else (0.0, 0.0, seed_file)
+    d0 = fits.getdata(ratio_frame).astype(float)
+    _, rbg, _ = sigma_clipped_stats(d0, sigma=3)
+    tflux = float(aperture_photometry(d0 - rbg, CircularAperture((tx + cx_off, ty + cy_off), r=5))['aperture_sum'][0])
     for c in loc['comparisons']:
-        c['flux'] = float(aperture_photometry(d0 - bg, CircularAperture((c['x'], c['y']), r=5))['aperture_sum'][0])
+        c['flux'] = float(aperture_photometry(d0 - rbg, CircularAperture((c['x'] + cx_off, c['y'] + cy_off), r=5))['aperture_sum'][0])
+    if best and ratio_frame != seed_file:
+        # The seed-floor estimate for the clearest frames was a fraction of the seed
+        # reading; measure it directly here instead (the fraction swung 446 -> 166 on
+        # Qatar-1 09-14 when the seed frame changed).
+        seed_clear, _ = seed_above_bg(ratio_frame, tx + cx_off, ty + cy_off)
+        say(f'  comparison ratios measured on the clearest frame, {best[0]} (target {tflux:.0f} ADU in 5 px, {seed_clear:.0f} ADU peak above background)')
     box = tg.get('box', (16, 634, 16, 484))
     comps, in_range = choose_comps(loc['comparisons'], tflux, box, lo, hi, a.ncomps)
     say(f'  comps: {len(comps)} chosen in box x[{box[0]},{box[1]}] y[{box[2]},{box[3]}]'
