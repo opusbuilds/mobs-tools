@@ -156,10 +156,16 @@ def main():
     grades = [grade(r[5]) for r in rows]
     print(f'target flux: clear reference {clear_ref:.0f} ADU (4 px aperture); '
           f'clear {grades.count("clear")}, partial {grades.count("partial")}, lost {grades.count("lost")}')
-    steps = [(rows[i][0].split('/')[-1], rows[i][3] - rows[i - 1][3]) for i in range(1, len(rows))
-             if rows[i][3] is not None and rows[i - 1][3] is not None and np.hypot(*(rows[i][3] - rows[i - 1][3])) > 25]
+    # Steps are measured between consecutive ALIGNED frames, not consecutive
+    # frames: on MObs a pointing step often happens under cloud, between two
+    # frames that could not be aligned, and a consecutive-frame diff never
+    # sees it (WASP-53 2026-09-15: one step reported, four plateaus in the
+    # centroid track).
+    aligned = [r for r in rows if r[3] is not None]
+    steps = [(aligned[i][0].split('/')[-1], aligned[i][3] - aligned[i - 1][3]) for i in range(1, len(aligned))
+             if np.hypot(*(aligned[i][3] - aligned[i - 1][3])) > 25]
     if steps:
-        print('pointing steps > 25 px between consecutive frames:')
+        print('pointing steps > 25 px between consecutive aligned frames:')
         for name, d in steps:
             print(f'  {name}: ({d[0]:+.0f}, {d[1]:+.0f})')
 
