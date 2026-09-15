@@ -36,6 +36,7 @@ from photutils.detection import DAOStarFinder
 from photutils.aperture import CircularAperture, aperture_photometry
 
 APERTURE_MARGIN_PX = 16   # widest aperture EXOTIC will try, plus slack
+MIN_TRUSTED_VOTES = 8     # of 25 pairs; below this a shift is noise, not a measurement
 
 
 def detect(path, fwhm, nsigma):
@@ -140,7 +141,11 @@ def main():
             print(f'{f.split("/")[-1]:32s} {ut:8s} {n:5d} {dx} {dy} {votes:5d} {fl} {med:5.0f} {grade(flux)}')
         print()
 
-    shifts = np.array([r[3] for r in rows if r[3] is not None])
+    # Shift range and comp box from TRUSTED shifts only (2026-09-15, TOI-2046): a frame
+    # with a handful of stars can 'vote' a 633 px shift on 3 pairs, which inverted the
+    # comp box (x in [649, 633]). Require a real consensus; fall back to all if none.
+    trusted = [r[3] for r in rows if r[3] is not None and r[4] >= MIN_TRUSTED_VOTES]
+    shifts = np.array(trusted if trusted else [r[3] for r in rows if r[3] is not None])
     dxmin, dxmax = shifts[:, 0].min(), shifts[:, 0].max()
     dymin, dymax = shifts[:, 1].min(), shifts[:, 1].max()
     print(f'frames {len(rows)}, aligned {len(shifts)}, sky {min(r[6] for r in rows):.0f}-{max(r[6] for r in rows):.0f} ADU/px')
