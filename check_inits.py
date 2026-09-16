@@ -118,6 +118,21 @@ def main():
         rel = abs(mine - theirs) / theirs
         check(rel <= tol, key.split(' (')[0], f'inits {mine}  archive {theirs}  ({rel * 100:.2f}% off)')
 
+    # Internal consistency, no network needed: a/Rs and the inclination fix the
+    # impact parameter, and b >= 1 + Rp/Rs is a planet that misses its star. A
+    # WBoM run on WASP-53 b (2026-09-15) reported inc 83.40 and a/Rs 11.78, b =
+    # 1.35, and timed a mid-transit on a flat line; the archive rows were fine.
+    rprs, ars, inc = (p.get(k) for k in ('Ratio of Planet to Stellar Radius (Rp/Rs)',
+                                          'Ratio of Distance to Stellar Radius (a/Rs)',
+                                          'Orbital Inclination (deg)'))
+    if None not in (rprs, ars, inc):
+        import math
+        b = abs(ars * math.cos(math.radians(inc)))
+        detail = f'b = a/Rs cos(i) = {b:.3f}  (1 + Rp/Rs = {1 + rprs:.3f})'
+        check(b < 1 + rprs, 'given geometry transits', detail)
+        if b < 1 + rprs:
+            warn(b <= 1 - rprs, 'geometry is not grazing', detail)
+
     print('\ntiming')
     fits_dir = u['Directory with FITS files']
     picks, jd0, jd1 = window(fits_dir)
