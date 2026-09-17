@@ -45,6 +45,23 @@ def _urlopen_retry(url, timeout, tries=2):
     for i in range(tries):
         try:
             return urllib.request.urlopen(url, timeout=timeout)
+        except urllib.error.HTTPError as e:
+            # 2026-09-17: the archive put a Cloudflare browser challenge in front
+            # of TAP/sync (403, cf-mitigated: challenge). A real browser passes it;
+            # fetch through headless Chromium and hand back a file-like object.
+            if e.code == 403 and e.headers.get('cf-mitigated') == 'challenge' and 'exoplanetarchive' in url:
+                import subprocess
+                # Optional: a browser-backed fetcher (see browser/tap-fetch.mjs in
+                # opus-infra; set MOBS_TAP_FETCH to its path). Without one, the 403
+                # is raised as before.
+                fetcher = os.environ.get('MOBS_TAP_FETCH', '/opt/opus-infra/browser/tap-fetch.mjs')
+                r = subprocess.run(['node', fetcher, url], capture_output=True, timeout=150) if os.path.exists(fetcher) else None
+                if r is not None and r.returncode == 0 and r.stdout.strip():
+                    print('  archive: API behind a browser challenge; fetched through headless Chromium instead')
+                    return io.BytesIO(r.stdout)
+            if i == tries - 1:
+                raise
+            time.sleep(3)
         except (TimeoutError, OSError) as e:
             if i == tries - 1:
                 raise
