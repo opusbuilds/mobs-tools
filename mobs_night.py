@@ -83,6 +83,9 @@ CAL_SCATTER, CAL_V, CAL_RATIO, CAL_BAR_MIN = 0.84, 11.57, 0.425, 8.2
 # law is now linear and shallow. The bar model was never the problem: fed the
 # observed scatter it predicted 9.1 min for WASP-67 b against 8.6 delivered.
 CAL_SLOPE = 0.05   # percent scatter per magnitude, from the three points above
+CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and photon
+                   # noise takes over: HAT-P-54 b (V 13.40, ~60 ADU) gave another
+                   # observer 2.6% scatter and a 24 min bar, not the flat law's 0.93%.
 # Seed floor, peak pixel above background in the seed frame. Set at 300 from the nights that failed
 # (WASP-80 34 ADU, Qatar-1 39, TrES-5); lowered to 200 on 2026-09-13 when WASP-52 b (197 ADU in a
 # 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
@@ -568,7 +571,12 @@ def main():
             if re.search(r'\[(FAIL|look|skip)', line):
                 say('    ' + line.strip())
 
-    scatter = CAL_SCATTER + CAL_SLOPE * (ar['V'] - CAL_V) if ar['V'] else None
+    if ar['V']:
+        scatter = CAL_SCATTER + CAL_SLOPE * (min(ar['V'], CAL_V_KNEE) - CAL_V)
+        if ar['V'] > CAL_V_KNEE:
+            scatter *= 10 ** (0.2 * (ar['V'] - CAL_V_KNEE))
+    else:
+        scatter = None
     bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN if scatter else None
 
     # 8. verdict
@@ -616,7 +624,7 @@ Predictions:
   QC PASS or MARGINAL (not predicting which).   [EDIT: state which if there is a reason]
 - Scatter, from the V-magnitude calibration ({CAL_SCATTER}% at V {CAL_V} on 2026-09-05, +{CAL_SLOPE}%/mag from three clean nights, revised 2026-09-18):
   ~{scatter:.2f}%. On a {depth:.2f}% depth that is scatter/depth {scatter / depth:.2f}; with {CAL_RATIO} giving
-  {CAL_BAR_MIN} min at ~3 min cadence, expected Tmid bar ~{bar:.0f} min (range {0.8 * bar:.0f}-{1.3 * bar:.0f}).
+  {CAL_BAR_MIN} min at ~3 min cadence, expected Tmid bar ~{bar:.0f} min (range {0.7 * bar:.0f}-{1.5 * bar:.0f}; two clean nights gave 9.6 and 8.6 against 6.7 and 9.0 predicted, so the bar model is two-point-crude).
   Under {0.6 * bar:.0f} min: calibration wrong the other way. Over {1.8 * bar:.0f} min: worse night than the counts show.
 - Tmid within 1 sigma (that bar) of {tmid:.5f}.   [EDIT: what a miss would and would not mean]
 - Depth within 1 sigma of {depth:.2f}%; Rp/Rs within 1 sigma of {ar['rprs']:.4f}.
