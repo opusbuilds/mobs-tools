@@ -75,6 +75,14 @@ SITE = {'lat': '+31.68', 'lon': '-110.88', 'elev': 1268}   # MObs, Whipple Obser
 # Calibration from 2026-09-05: WASP-11 b (archive V 11.57) gave 0.84% residual scatter at 60 s;
 # scatter/depth 0.42-0.43 gave Tmid bars of 6.6 and 9.8 min (KELT-23A, WASP-11) at ~3 min cadence.
 CAL_SCATTER, CAL_V, CAL_RATIO, CAL_BAR_MIN = 0.84, 11.57, 0.425, 8.2
+# Scatter law, revised 2026-09-18. The first law scaled the 09-05 point by
+# photon noise, 10**(0.2*(V-11.57)), and predicted 1.31% at V 12.54; the night
+# delivered 0.90%. Three clean nights now: 0.84% at V 11.57 (09-05), 0.85% at
+# 11.55 (TOI-3693 b, 09-13), 0.90% at 12.54 (WASP-67 b, 09-18). That is a
+# systematics floor with almost no magnitude slope on this instrument, so the
+# law is now linear and shallow. The bar model was never the problem: fed the
+# observed scatter it predicted 9.1 min for WASP-67 b against 8.6 delivered.
+CAL_SLOPE = 0.05   # percent scatter per magnitude, from the three points above
 # Seed floor, peak pixel above background in the seed frame. Set at 300 from the nights that failed
 # (WASP-80 34 ADU, Qatar-1 39, TrES-5); lowered to 200 on 2026-09-13 when WASP-52 b (197 ADU in a
 # 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
@@ -560,7 +568,7 @@ def main():
             if re.search(r'\[(FAIL|look|skip)', line):
                 say('    ' + line.strip())
 
-    scatter = CAL_SCATTER * 10 ** (0.2 * (ar['V'] - CAL_V)) if ar['V'] else None
+    scatter = CAL_SCATTER + CAL_SLOPE * (ar['V'] - CAL_V) if ar['V'] else None
     bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN if scatter else None
 
     # 8. verdict
@@ -606,7 +614,7 @@ Predictions:
 - Sky judged by stars per frame and the target's aperture flux (night_triage), not the background.
   If the counts hold through {ut(ing)}-{ut(egr)} and the seed target is >{SEED_MIN_ADU} ADU above background:
   QC PASS or MARGINAL (not predicting which).   [EDIT: state which if there is a reason]
-- Scatter, from the V-magnitude calibration ({CAL_SCATTER}% at V {CAL_V} on 2026-09-05, photon scaling):
+- Scatter, from the V-magnitude calibration ({CAL_SCATTER}% at V {CAL_V} on 2026-09-05, +{CAL_SLOPE}%/mag from three clean nights, revised 2026-09-18):
   ~{scatter:.2f}%. On a {depth:.2f}% depth that is scatter/depth {scatter / depth:.2f}; with {CAL_RATIO} giving
   {CAL_BAR_MIN} min at ~3 min cadence, expected Tmid bar ~{bar:.0f} min (range {0.8 * bar:.0f}-{1.3 * bar:.0f}).
   Under {0.6 * bar:.0f} min: calibration wrong the other way. Over {1.8 * bar:.0f} min: worse night than the counts show.
