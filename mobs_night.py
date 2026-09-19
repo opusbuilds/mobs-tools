@@ -139,7 +139,7 @@ def archive(planet):
     cols = ('pl_name,hostname,pl_orbper,pl_orbpererr1,pl_tranmid,pl_tranmiderr1,pl_trandur,pl_ratror,pl_ratrorerr1,'
             'pl_ratdor,pl_ratdorerr1,pl_orbincl,pl_orbinclerr1,pl_orbeccen,pl_orblper,st_teff,st_tefferr1,st_tefferr2,'
             'st_met,st_meterr1,st_meterr2,st_logg,st_loggerr1,st_loggerr2,sy_dist,sy_pmra,sy_pmdec,sy_vmag,ra,dec,'
-            'pl_radj,st_rad,pl_trandep')
+            'pl_radj,st_rad,st_mass,pl_trandep')
     q = f"select {cols} from pscomppars where pl_name='{planet}'"
     url = TAP + urllib.parse.urlencode({'query': q, 'format': 'csv'})
     rows = list(csv.DictReader(io.StringIO(_urlopen_retry(url, 60).read().decode())))
@@ -156,11 +156,21 @@ def archive(planet):
         rprs, rprs_from = math.sqrt(f('pl_trandep') / 100.0), 'sqrt(pl_trandep)'
     if rprs is None:
         raise SystemExit(f'archive: no Rp/Rs, radii or depth for {planet!r} in pscomppars')
+    # Same gap on a/Rs (TOI-5300 b, 2026-09-19: no pl_ratdor, so my inits carried a
+    # null and EXOTIC's own pre-flight FAILED on it while check_inits skipped it).
+    # Kepler's third law from the stellar mass and radius is what EXOTIC does
+    # internally; it reproduces EXOTIC's 9.763 for TOI-5300 b as 9.748.
+    ars, ars_from = f('pl_ratdor'), 'pl_ratdor'
+    if ars is None and f('st_mass') and f('st_rad') and f('pl_orbper'):
+        a_au = (f('st_mass') * (f('pl_orbper') / 365.25) ** 2) ** (1.0 / 3.0)
+        ars, ars_from = a_au / (f('st_rad') * 0.00465047), 'Kepler III from st_mass, st_rad'
+    if ars is None:
+        raise SystemExit(f'archive: no a/Rs and no stellar mass+radius for {planet!r} in pscomppars')
     return {
         'planet': r['pl_name'], 'host': r['hostname'],
         'P': f('pl_orbper'), 'Perr': f('pl_orbpererr1', 1e-6), 'T0': f('pl_tranmid'), 'T0err': f('pl_tranmiderr1', 1e-3),
         'T14h': f('pl_trandur'), 'rprs': rprs, 'rprs_from': rprs_from, 'rprserr': f('pl_ratrorerr1', 0.005),
-        'ars': f('pl_ratdor'), 'arserr': f('pl_ratdorerr1', 0.2), 'inc': f('pl_orbincl'), 'incerr': f('pl_orbinclerr1', 0.5),
+        'ars': ars, 'ars_from': ars_from, 'arserr': f('pl_ratdorerr1', 0.2), 'inc': f('pl_orbincl'), 'incerr': f('pl_orbinclerr1', 0.5),
         'ecc': f('pl_orbeccen', 0.0), 'omega': f('pl_orblper', 90.0),
         'teff': f('st_teff'), 'teffp': f('st_tefferr1', 100.0), 'teffm': f('st_tefferr2', -100.0),
         'met': f('st_met', 0.0), 'metp': f('st_meterr1', 0.1), 'metm': f('st_meterr2', -0.1),
@@ -329,7 +339,8 @@ def main():
     # 2. archive
     ar = archive(a.planet)
     depth = 100 * ar['rprs'] ** 2
-    say(f'  archive: P {ar["P"]:.8f} d, T0 {ar["T0"]:.6f}, T14 {ar["T14h"]:.3f} h, Rp/Rs {ar["rprs"]:.4f} (depth {depth:.2f}%), V {ar["V"]}' + ('' if ar['rprs_from'] == 'pl_ratror' else f' (Rp/Rs derived from {ar["rprs_from"]}; no pl_ratror in pscomppars)'))
+    say(f'  archive: P {ar["P"]:.8f} d, T0 {ar["T0"]:.6f}, T14 {ar["T14h"]:.3f} h, Rp/Rs {ar["rprs"]:.4f} (depth {depth:.2f}%), V {ar["V"]}' + ('' if ar['rprs_from'] == 'pl_ratror' else f' (Rp/Rs derived from {ar["rprs_from"]}; no pl_ratror in pscomppars)')
+        + ('' if ar['ars_from'] == 'pl_ratdor' else f' (a/Rs {ar["ars"]:.3f} derived: {ar["ars_from"]}; no pl_ratdor in pscomppars)'))
 
     # 3. timing
     n = round(((jd0 + jd1) / 2 - ar['T0']) / ar['P'])

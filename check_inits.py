@@ -133,6 +133,13 @@ def main():
         if b < 1 + rprs:
             warn(b <= 1 - rprs, 'geometry is not grazing', detail)
 
+    # A null in the planetary parameters is a FAIL, not a skip: EXOTIC's own
+    # pre-flight rejects the file (TOI-5300 b, 2026-09-19, a/Rs None) and its
+    # reduction would crash later. Cheaper to catch here than in the archive
+    # comparison, which has nothing to compare a null against.
+    nulls = [k for k, v in p.items() if v is None and 'Uncertainty' not in k]
+    check(not nulls, 'no null planetary parameters', ', '.join(nulls) if nulls else 'all present')
+
     print('\ntiming')
     fits_dir = u['Directory with FITS files']
     picks, jd0, jd1 = window(fits_dir)
