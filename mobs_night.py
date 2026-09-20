@@ -611,6 +611,18 @@ def main():
         reasons.append('exotic -pf failed')
     verdict = 'REJECT' if reasons else 'PROCEED'
     say(f'== verdict: {verdict}' + (': ' + '; '.join(reasons) if reasons else ''))
+    # Night record for observatory.opusgarden.dev (2026-09-20): what the triage table
+    # does not hold. publish.ts pairs it with triage.txt.
+    json.dump({'verdict': verdict, 'clauses': reasons,
+               'seed': {'file': os.path.basename(seed_file), 'x': round(tx, 1), 'y': round(ty, 1), 'above': round(above), 'bg': round(bg),
+                        'clear': round(seed_clear) if seed_clear is not None else None},
+               'floor': SEED_MIN_ADU, 'ratio_range': [lo, hi], 'in_range': bool(in_range),
+               'comps': [{'x': round(c['x'], 1), 'y': round(c['y'], 1), 'ratio': round(c.get('ratio', 0), 2) if c.get('ratio') is not None else None} for c in comps],
+               'window': {'ingress_ut': ut(ing), 'mid_ut': ut(tmid), 'egress_ut': ut(egr), 'coverage': coverage},
+               'frames': {k: list(v) for k, v in tg.items() if k in ('pre', 'in', 'post')} if tg else {},
+               'expected': {'scatter_pct': round(scatter, 2) if scatter else None, 'bar_min': round(bar, 1) if bar else None},
+               'written': datetime.now(timezone.utc).isoformat(timespec='minutes')},
+              open(os.path.join(ddir, 'night.json'), 'w'), indent=1)
     if bar:
         say(f'   derived expectation if clear: scatter ~{scatter:.2f}%, Tmid bar ~{bar:.0f} min')
 
