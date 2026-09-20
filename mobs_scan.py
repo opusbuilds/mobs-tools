@@ -42,6 +42,7 @@ LISTING = 'https://waps.cfa.harvard.edu/microobservatory/MOImageDirectory/ImageD
 TAP = 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?'
 ALIAS = 'https://exoplanetarchive.ipac.caltech.edu/cgi-bin/Lookup/nph-aliaslookup.py?objname='
 CACHE = os.path.join(HERE, '.mobs_scan_cache.json')
+LISTINGS = os.path.join(os.path.dirname(HERE), 'listings')
 MIN_FRAMES = 10
 
 
@@ -121,7 +122,7 @@ def main():
     if yymmdd == now.strftime('%y%m%d') and now.hour < 14:
         print(f'  NOTE: scanned at {now:%H:%M} UT on the same UT date; the MObs night runs until ~13:30 UT, so this '
               f'listing may still be growing. Do not reject a night on geometry from it; re-scan after 14:00 UT.')
-    lines, worth = [], []
+    lines, worth, snap = [], [], []
     for name, hms in sorted(by.items()):
         if len(hms) < MIN_FRAMES:
             continue
@@ -133,6 +134,7 @@ def main():
         P, T0 = r['pl_orbper'], r['pl_tranmid']
         if not P or not T0:
             lines.append(f'  {name:12s} {len(hms):3d} frames  {ut(j0)}-{ut(j1)}  {r["pl_name"]}: no ephemeris in pscomppars')
+            snap.append({'target': name, 'planet': r['pl_name'], 'frames': len(hms), 'first_ut': ut(j0), 'last_ut': ut(j1), 'coverage': 'no ephemeris'})
             continue
         n = round(((j0 + j1) / 2 - T0) / P)
         tmid = T0 + n * P
@@ -160,9 +162,18 @@ def main():
                 f'ingress {ut(ing)} mid {ut(tmid)} egress {ut(egr)}  {cov:12s} pre {pre:+.0f} post {post:+.0f} min  '
                 f'bar {bar:.0f} min  {v}  depth {depth}' + ('  [last frame < 3 h ago: still running?]' if growing else ''))
         lines.append(line)
+        snap.append({'target': name, 'planet': r['pl_name'], 'frames': len(hms), 'first_ut': ut(j0), 'last_ut': ut(j1),
+                     'coverage': cov, 'ingress_ut': ut(ing), 'mid_ut': ut(tmid), 'egress_ut': ut(egr), 'pre_min': round(pre), 'post_min': round(post),
+                     'bar_min': round(bar, 1), 'vmag': r['sy_vmag'], 'depth_pct': round(100 * rprs ** 2, 2) if rprs else r['pl_trandep'], 'growing': growing})
         if cov != 'NONE':
             worth.append(f'  venv/bin/python tools/mobs_night.py {name} {yymmdd} --planet "{r["pl_name"]}"')
     json.dump(cache, open(CACHE, 'w'), indent=0, sort_keys=True)
+    # Snapshot for observatory.opusgarden.dev's nights page (2026-09-20): one file per night,
+    # overwritten by a later scan of the same night (a same-day scan sees a night still growing).
+    os.makedirs(LISTINGS, exist_ok=True)
+    json.dump({'date': f'20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:]}', 'scanned': now.isoformat(timespec='minutes'),
+               'growing': yymmdd == now.strftime('%y%m%d') and now.hour < 14, 'entries': snap},
+              open(os.path.join(LISTINGS, f'20{yymmdd}.json'), 'w'), indent=1)
     print('\n'.join(lines) if lines else '  no exoplanet target with %d+ frames' % MIN_FRAMES)
     if worth:
         print('worth opening:')
