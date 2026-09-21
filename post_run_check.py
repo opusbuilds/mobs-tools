@@ -35,6 +35,12 @@ lines = open(logs[-1], errors='ignore').read().splitlines()
 m = re.search(r'([\d]+\.[\d]+) \+/- ([\d.]+)', str(reported))
 central = m.group(1) if m else None
 cands = [i for i, l in enumerate(lines) if 'parameters: fit_method=' in l and (central is None or f'Tmid={central}' in l)]
+matched = 'by Tmid'
+if not cands:
+    # A single-comparison run prints its evaluation-stage Tmid here and a different final
+    # one after detrending (WASP-52 b 09-20: 2461303.7409 vs .7417), so match by position.
+    cands = [i for i, l in enumerate(lines) if 'parameters: fit_method=' in l]
+    matched = 'by position (last block; its Tmid differs from FinalParams)'
 fired = None; keys = '-'
 if cands:
     i = cands[-1]
@@ -48,7 +54,25 @@ if cands:
 
 verdict = []
 verdict.append(f'reported Tmid: {reported}')
-verdict.append(f'selected-final-fit fallback fired for tmid: {fired}  (replaced keys: {keys})')
+verdict.append(f'selected-final-fit fallback fired for tmid: {fired}  (replaced keys: {keys}; block matched {matched})')
+
+# Coverage of the comparison the transit fit actually used. WASP-52 b 09-20: EXOTIC chose a
+# star with 11 PSF-quality rejects (67/78 frames) over full-coverage stars 0.08% worse on its
+# score; the fit ran on 60 points, lost 7 of them in the first half of the transit, went grazing
+# and 7 minutes late. A full-coverage comparison put the same night at -0.9 min.
+sel = [l for l in lines if 'Transit Fit Comparison Star: #' in l and '[' in l]
+if sel:
+    sm = re.search(r'#(\d+) - \[([\d.]+), ([\d.]+)\]', sel[-1])
+    if sm:
+        n, cx, cy = sm.group(1), sm.group(2), sm.group(3)
+        cov = [l for l in lines if re.search(rf'Comp {n}\b.*\(x={cx}, y={cy}\).*coverage=', l)]
+        cm = re.search(r'coverage=(\d+) valid frame\(s\) out of (\d+) total.*?psf_quality_rejects=(\d+)', cov[-1]) if cov else None
+        if cm:
+            a_, b_, rej = int(cm.group(1)), int(cm.group(2)), int(cm.group(3))
+            line = f'transit-fit comparison #{n} ({cx},{cy}): coverage {a_}/{b_} frames, {rej} PSF rejects'
+            if a_ < 0.9 * b_:
+                line += ' -- WARN partial-coverage comparison; the fit lost frames. Refit with a full-coverage comparison before quoting Tmid.'
+            verdict.append(line)
 
 if fired and not a.no_refit and csvs:
     bounds = fp.get('Pre-UltraNest LM boundary scout final bounds')
