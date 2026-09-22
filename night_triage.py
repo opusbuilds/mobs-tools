@@ -165,11 +165,18 @@ def main():
     print(f'target flux: clear reference {clear_ref:.0f} ADU (4 px aperture); '
           f'clear {grades.count("clear")}, partial {grades.count("partial")}, lost {grades.count("lost")}')
     # The CEILING, the counterpart of the seed floor. Added 2026-09-22 after HD 189733 b
-    # (V 7.67) sailed through every gate to PROCEED with its core clipped at DATAMAX in
-    # 45% of frames, 17 of them in transit. Fifty nights of V 11-13 targets never made
-    # this bind, so the tool had a floor and no ceiling. Note frame 1's core was at 86%
-    # of full well that night, so a first-frame pre-flight check would have missed it:
-    # the fraction over the whole night is the measurement that matters.
+    # (V 7.67) reached PROCEED with its core clipped at DATAMAX in 45% of frames, 17 of
+    # them in transit. Fifty-seven nights of V 11-13 targets never made this bind.
+    # WHAT THIS IS NOT: it is not a gap in EXOTIC. exotic.py already rejects overexposed
+    # target AND comparison frames by default, at a 0.9 fraction of a saturation value it
+    # reads from the header per telescope (4096 for Cecilia) -- the same 90% criterion
+    # arrived at here independently. The point of measuring it in TRIAGE is to know before
+    # an hour of reduction that the reducer is about to discard half the night, and to get
+    # one night-level number instead of per-star warnings scattered through a log. Frame
+    # loss of that size, unevenly spread across a transit, is the mechanism that put
+    # WASP-52 b 7 minutes late on 09-20. Frame 1's core was at 86% of full well, under
+    # threshold, so a first-frame pre-flight test would have passed the night: it is the
+    # fraction over the whole night that carries the information.
     dmax = float(fits.getheader(files[0]).get('DATAMAX') or 4095)
     peaks = np.array([r[7] for r in rows], dtype=float)
     fin = peaks[np.isfinite(peaks)]

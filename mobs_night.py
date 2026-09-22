@@ -91,13 +91,15 @@ CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and pho
 # 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
 # 8 min Tmid bar. One night; the number moves again on the next one that bears on it.
 SEED_MIN_ADU = 200
-# The CEILING. A clipped core loses flux by a seeing-dependent amount, so it injects
-# spurious variability into the target and does so most strongly in the best-seeing
-# frames. Set 2026-09-22 from HD 189733 b (V 7.67, 8 s exposures): PROCEED on every
-# other gate with its core at DATAMAX in 35/77 frames (45%), 17 of them in transit,
-# and above 90% of full well in 47/77. One night; like the floor, this number moves
-# again on the next night that bears on it. 90% because CCDs leave the linear regime
-# before full well, so clipping is the last symptom, not the first.
+# The CEILING. Set 2026-09-22 from HD 189733 b (V 7.67, 8 s exposures): PROCEED on
+# every other gate with its core at DATAMAX in 35/75 alignable frames (45%), 17 of the
+# 37 in-transit frames, and above 90% of full well in 47/75. 90% because a CCD leaves
+# its linear regime before full well, so clipping is the last symptom rather than the
+# first; EXOTIC's own reject_overexposed_stars uses the same 0.9 fraction, which is a
+# check on the number and not a coincidence I should take credit for. This gate exists
+# to say NO BEFORE the reduction, since EXOTIC would discard those frames itself and
+# leave a thin, unevenly sampled transit -- the WASP-52 b row-56 mechanism. One night;
+# like the floor, the number moves again on the next night that bears on it.
 SAT_NONLINEAR_FRAC = 0.90   # of DATAMAX: above this a frame's core is not trustworthy
 SAT_FRAME_FRAC_MAX = 0.10   # reject when more than this fraction of frames are there
 # KAF-1402ME as listed for MicroObservatory on science.nasa.gov/citizen-science/exoplanet-watch/how-to-contribute/how-to-submit-your-data/
