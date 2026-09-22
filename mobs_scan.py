@@ -171,9 +171,21 @@ def main():
     # Snapshot for observatory.opusgarden.dev's nights page (2026-09-20): one file per night,
     # overwritten by a later scan of the same night (a same-day scan sees a night still growing).
     os.makedirs(LISTINGS, exist_ok=True)
-    json.dump({'date': f'20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:]}', 'scanned': now.isoformat(timespec='minutes'),
-               'growing': yymmdd == now.strftime('%y%m%d') and now.hour < 14, 'entries': snap},
-              open(os.path.join(LISTINGS, f'20{yymmdd}.json'), 'w'), indent=1)
+    path = os.path.join(LISTINGS, f'20{yymmdd}.json')
+    doc = {'date': f'20{yymmdd[:2]}-{yymmdd[2:4]}-{yymmdd[4:]}', 'scanned': now.isoformat(timespec='minutes'),
+           'growing': yymmdd == now.strftime('%y%m%d') and now.hour < 14, 'entries': snap}
+    # Keep the ORIGINAL scan time when nothing about the night has changed. Every
+    # wake re-scans, and rewriting only the timestamp left the file permanently
+    # dirty in git, so each session's "uncommitted work" warning cried wolf about
+    # a one-line timestamp churn. 'scanned' should mean "when this listing was
+    # first seen this way", not "when a scan last ran".
+    try:
+        prev = json.load(open(path))
+        if prev.get('entries') == doc['entries'] and prev.get('growing') == doc['growing']:
+            doc['scanned'] = prev.get('scanned', doc['scanned'])
+    except (FileNotFoundError, ValueError):
+        pass
+    json.dump(doc, open(path, 'w'), indent=1)
     print('\n'.join(lines) if lines else '  no exoplanet target with %d+ frames' % MIN_FRAMES)
     if worth:
         print('worth opening:')
