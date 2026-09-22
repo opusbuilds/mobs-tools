@@ -91,6 +91,15 @@ CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and pho
 # 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
 # 8 min Tmid bar. One night; the number moves again on the next one that bears on it.
 SEED_MIN_ADU = 200
+# The CEILING. A clipped core loses flux by a seeing-dependent amount, so it injects
+# spurious variability into the target and does so most strongly in the best-seeing
+# frames. Set 2026-09-22 from HD 189733 b (V 7.67, 8 s exposures): PROCEED on every
+# other gate with its core at DATAMAX in 35/77 frames (45%), 17 of them in transit,
+# and above 90% of full well in 47/77. One night; like the floor, this number moves
+# again on the next night that bears on it. 90% because CCDs leave the linear regime
+# before full well, so clipping is the last symptom, not the first.
+SAT_NONLINEAR_FRAC = 0.90   # of DATAMAX: above this a frame's core is not trustworthy
+SAT_FRAME_FRAC_MAX = 0.10   # reject when more than this fraction of frames are there
 # KAF-1402ME as listed for MicroObservatory on science.nasa.gov/citizen-science/exoplanet-watch/how-to-contribute/how-to-submit-your-data/
 MOBS_NOISE = {'gain': 53.6, 'read_noise': 15.0, 'dark': 15.0}
 
@@ -268,6 +277,11 @@ def parse_triage(text):
         if m:
             g[ph] = tuple(int(v) for v in m.groups())
     g['steps'] = len(re.findall(r'^\s+\S+: \([+-]\d+, [+-]\d+\)$', text, re.M))
+    m = re.search(r'target core: peak median (\d+) of DATAMAX (\d+) \((\d+)%\); '
+                  r'clipped (\d+)/(\d+), over 90% of full well (\d+)/(\d+)', text)
+    if m:
+        g['core'] = {'peak_median': int(m.group(1)), 'datamax': int(m.group(2)), 'pct': int(m.group(3)),
+                     'clipped': int(m.group(4)), 'n': int(m.group(5)), 'nonlinear': int(m.group(6))}
     return g
 
 
@@ -605,6 +619,11 @@ def main():
         reasons.append(f'only {tg["in"][1] + tg["in"][2]} usable in-transit frames')
     if not in_range:
         reasons.append(f'no comparison within {lo}-{hi}x of the target')
+    core = tg.get('core')
+    if core and core['n'] and core['nonlinear'] / core['n'] > SAT_FRAME_FRAC_MAX:
+        reasons.append(f"target core saturated: {core['clipped']}/{core['n']} frames clipped at "
+                       f"DATAMAX {core['datamax']}, {core['nonlinear']}/{core['n']} above "
+                       f"{SAT_NONLINEAR_FRAC:.0%} of full well (peak median {core['pct']}%)")
     if rc != 0:
         reasons.append('check_inits failed')
     if pf_rc != 0:

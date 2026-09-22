@@ -111,11 +111,19 @@ def main():
         top = xy[np.argsort(fl)[::-1][:a.ref_stars]] if len(xy) else xy
         sh, votes = voted_shift(top, ref)
         if sh is None:
-            rows.append((f, jd, len(xy), None, 0, np.nan, med))
+            rows.append((f, jd, len(xy), None, 0, np.nan, med, float('nan')))
             continue
         pos = tgt + sh
         flux = aperture_photometry(data - med, CircularAperture(pos, r=4))['aperture_sum'][0]
-        rows.append((f, jd, len(xy), sh, votes, float(flux), med))
+        # Peak RAW ADU in the target's core. The aperture sum cannot see clipping:
+        # a saturated core just makes the sum quietly too small, by an amount that
+        # depends on the seeing, so the target acquires spurious variability that is
+        # WORST when the seeing is best. Measured raw (not background-subtracted),
+        # because saturation is a statement about the detector, not the sky.
+        yi, xi = int(round(pos[1])), int(round(pos[0]))
+        core = data[max(0, yi - 3):yi + 4, max(0, xi - 3):xi + 4]
+        peak = float(core.max()) if core.size else float('nan')
+        rows.append((f, jd, len(xy), sh, votes, float(flux), med, peak))
 
     fluxes = np.array([r[5] for r in rows])
     good = fluxes[np.isfinite(fluxes)]
@@ -134,7 +142,7 @@ def main():
 
     if not a.quiet:
         print(f'{"frame":32s} {"UT":8s} {"stars":>5s} {"dx":>7s} {"dy":>7s} {"votes":>5s} {"tflux":>7s} {"sky":>5s} grade')
-        for f, jd, n, sh, votes, flux, med in rows:
+        for f, jd, n, sh, votes, flux, med, _peak in rows:
             ut = Time(jd, format='jd').iso[11:19] if np.isfinite(jd) else '?'
             dx, dy = (f'{sh[0]:7.1f}', f'{sh[1]:7.1f}') if sh is not None else ('      ?', '      ?')
             fl = f'{flux:7.0f}' if np.isfinite(flux) else '      ?'
@@ -156,6 +164,21 @@ def main():
     grades = [grade(r[5]) for r in rows]
     print(f'target flux: clear reference {clear_ref:.0f} ADU (4 px aperture); '
           f'clear {grades.count("clear")}, partial {grades.count("partial")}, lost {grades.count("lost")}')
+    # The CEILING, the counterpart of the seed floor. Added 2026-09-22 after HD 189733 b
+    # (V 7.67) sailed through every gate to PROCEED with its core clipped at DATAMAX in
+    # 45% of frames, 17 of them in transit. Fifty nights of V 11-13 targets never made
+    # this bind, so the tool had a floor and no ceiling. Note frame 1's core was at 86%
+    # of full well that night, so a first-frame pre-flight check would have missed it:
+    # the fraction over the whole night is the measurement that matters.
+    dmax = float(fits.getheader(files[0]).get('DATAMAX') or 4095)
+    peaks = np.array([r[7] for r in rows], dtype=float)
+    fin = peaks[np.isfinite(peaks)]
+    if len(fin):
+        clipped = int((fin >= dmax).sum())
+        nonlin = int((fin >= 0.9 * dmax).sum())
+        print(f'target core: peak median {np.median(fin):.0f} of DATAMAX {dmax:.0f} '
+              f'({100 * np.median(fin) / dmax:.0f}%); clipped {clipped}/{len(fin)}, '
+              f'over 90% of full well {nonlin}/{len(fin)}')
     # Steps are measured between consecutive ALIGNED frames, not consecutive
     # frames: on MObs a pointing step often happens under cloud, between two
     # frames that could not be aligned, and a consecutive-frame diff never
