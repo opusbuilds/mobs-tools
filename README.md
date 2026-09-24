@@ -8,7 +8,7 @@ frames (650 x 500 at 5.0"/px, no WCS in the header, `DATE-OBS` in local Arizona
 time) but nothing in them is MObs-specific beyond the defaults.
 
 Used on every night in the [observatory ledger](https://opusgarden.dev/observatory)
-since they were written. Thirty-nine of the fifty-five rows there are
+since they were written. Forty-three of the sixty rows there are
 rejections; these tools are how most of them became rejections *before* a fit
 instead of after.
 
@@ -19,6 +19,7 @@ instead of after.
 | `night_triage.py` | is the night worth reducing, and where can a comparison sit and stay on the chip? | before writing the inits file |
 | `check_inits.py` | does the inits file describe the right planet, in the right place, at the right time? | before starting EXOTIC |
 | `post_run_check.py` | is the reported Tmid uncertainty the posterior, or a replaced bar? did the fit lose frames to its comparison star? | after EXOTIC finishes |
+| `pointing_clock.py` | was the telescope's clock right that night? (a physical check; the header's own time fields cannot answer it) | when a mid-time is suspicious |
 | `indep_tmid.py` | what does an independent sampler get on the same detrended points? | called by `post_run_check.py`, or on its own |
 | `mobs_night.py` | all of the above, in order, from a target name and a date | one command per night |
 
@@ -185,6 +186,37 @@ its comparison should be refit before its mid-time is quoted.
 `indep_tmid.py` is also useful on its own as an external reference for any fit:
 
     python3 indep_tmid.py inits.json output/working_artifacts/FinalLightCurve_X.csv [--free-baseline]
+
+## pointing_clock.py
+
+When a mid-transit time comes out far from a well-known ephemeris, the first
+suspect is the camera's clock, and the header cannot clear it. `LST-OBS` and
+`TELALT`/`TELAZ` look like independent time references, but the telescope's
+software computes them from the same clock that writes `DATE-OBS`, so they
+agree with it by construction. (Read `RA`/`DEC` as coordinates of date, which
+they are, and `TELALT` matches the commanded position to about 4 arcseconds,
+while the telescope's real pointing misses by several arcminutes: it reports
+the command, not the telescope.)
+
+What does test the clock is where the telescope physically pointed. A mount
+aims by hour angle computed from its sidereal clock, so a clock wrong by N
+minutes misses its target by about N minutes of right ascension. At the
+declination of a typical target that is degrees, far more than the field.
+
+    python3 pointing_clock.py data/HATP-32_20260921 data/WASP-67_20260918
+
+It plate-solves the first frame of each night that solves (astrometry.net, as
+above), converts the solved centre to coordinates of date, and reports the
+miss from the commanded `RA`/`DEC` in arcminutes and in minutes of time.
+On MObs Cecilia in September 2026 every night missed by between -0.4 and -1.0
+minutes of RA, including a night whose transit came out 12 minutes early:
+so that night's clock was right, and the cause was elsewhere.
+
+Two assumptions make this valid, and both were confirmed for Cecilia by its
+operator: the mount points open-loop (a pointing model and encoders, with no
+plate-solve re-centring, which would hide a clock error), and the same host
+computer, synced to network time, both aims the mount and stamps `DATE-OBS`.
+On another telescope, check both before trusting the answer.
 
 ## mobs_night.py
 
