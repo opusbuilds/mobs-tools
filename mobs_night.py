@@ -209,6 +209,11 @@ TWILIGHT_SKY = 1000    # median sky above this is dusk or dawn, not a night fram
                        # WASP-80 2026-09-08: dusk frames read 4095, 3197, 1692; the first usable
                        # frame read 718 with 85 stars; the night settled at 430-500
 MIN_SEED_STARS = 10    # a seed frame needs a star field to plate-solve and to vote with
+TWILIGHT_SUN_ALT = -12.0  # deg. Twilight is a statement about the SUN, not the sky: a bright sky with
+                          # the Sun well below this is moonlight or lit cloud, not dusk. WASP-177 b
+                          # 2026-09-25: all 74 frames read above 1000 ADU under a ~98% moon at local
+                          # midnight, the sky-only rule set every one aside as 'twilight', and the
+                          # tool then crashed on an empty frame list instead of giving a verdict.
 
 
 def set_aside_twilight(ddir):
@@ -223,11 +228,24 @@ def set_aside_twilight(ddir):
     on a 402-414 ADU sky and were set aside as "twilight" by the old star-count rule,
     which hid the whole clouded pre-ingress stretch from the triage counts."""
     import shutil
+    from astropy.io import fits
+    from astropy.time import Time
+    from astropy.coordinates import EarthLocation, AltAz, get_sun
+    import astropy.units as u
+    loc = EarthLocation(lat=float(SITE['lat']) * u.deg, lon=float(SITE['lon']) * u.deg, height=SITE['elev'] * u.m)
     moved = []
     for f in sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS')):
         data, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
         if med <= TWILIGHT_SKY:
             break
+        # Bright, but is it twilight? Only if the Sun is near the horizon at this frame.
+        try:
+            t = Time(frame_time(fits.getheader(os.path.join(ddir, f))), format='jd', scale='utc')
+            sun_alt = get_sun(t).transform_to(AltAz(obstime=t, location=loc)).alt.deg
+        except Exception:
+            sun_alt = None
+        if sun_alt is not None and sun_alt < TWILIGHT_SUN_ALT:
+            break                       # night-time bright sky (moon, lit cloud): the triage judges it
         os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
         shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
         moved.append(f)
@@ -252,6 +270,8 @@ def first_seedable_frame(ddir, files):
 def window(ddir):
     from astropy.io import fits
     files = sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS'))
+    if not files:
+        return [], None, None, None     # the caller turns this into a verdict, not a traceback
     h0, h1 = fits.getheader(os.path.join(ddir, files[0])), fits.getheader(os.path.join(ddir, files[-1]))
     return files, frame_time(h0), frame_time(h1) + float(h1.get('EXPTIME', 60)) / 86400.0, h0
 
@@ -386,7 +406,13 @@ def main():
         say(f'  no frame has {MIN_SEED_STARS} stars on a night-dark sky: {len(files)} frames, '
             f'{min(stars)}-{max(stars)} stars (median {int(np.median(stars))}), sky {min(skies):.0f}-{max(skies):.0f} ADU/px; '
             f'nothing to seed from, so nothing to solve')
-        say(f'== verdict: REJECT: every frame star-poor ({min(stars)}-{max(stars)} stars); '
+        # Name the actual reason. WASP-177 b 2026-09-25 had a median of 14 stars (above the
+        # threshold) on a 1978-2430 ADU moonlit sky, and the old clause called it 'star-poor'.
+        dark = [c for c in counts if c[1] <= TWILIGHT_SKY]
+        why = (f'every frame star-poor ({min(stars)}-{max(stars)} stars)' if dark else
+               f'no night-dark frame to seed from: sky {min(skies):.0f}-{max(skies):.0f} ADU/px all night with the Sun down '
+               f'(moonlight or lit cloud), {min(stars)}-{max(stars)} stars')
+        say(f'== verdict: REJECT: {why}; '
             f'transit window {ut(ing)}-{ut(egr)} UT inside a {ut(jd0)}-{ut(jd1)} night')
         raise SystemExit(1)
     if start:
