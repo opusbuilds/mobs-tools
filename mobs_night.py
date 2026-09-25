@@ -217,7 +217,7 @@ TWILIGHT_SUN_ALT = -12.0  # deg. Twilight is a statement about the SUN, not the 
 
 
 def set_aside_twilight(ddir):
-    """Move LEADING twilight frames (median sky above TWILIGHT_SKY) to <ddir>/excluded,
+    """Move LEADING and TRAILING twilight frames (median sky above TWILIGHT_SKY) to <ddir>/excluded,
     stopping at the first night frame. These are not observations of anything and must
     not seed a reduction or be counted in the triage. WASP-80 2026-09-08: frames 1-3
     were dusk; the real first frame was 16 minutes in.
@@ -226,15 +226,37 @@ def set_aside_twilight(ddir):
     that is cloud or an empty low field, and it belongs in the triage as a lost frame.
     WASP-50 2026-09-09: the first 41 frames (07:33-09:33 UT, two hours) had 0-9 stars
     on a 402-414 ADU sky and were set aside as "twilight" by the old star-count rule,
-    which hid the whole clouded pre-ingress stretch from the triage counts."""
+    which hid the whole clouded pre-ingress stretch from the triage counts.
+
+    TRAILING (dawn) frames get the same rule from the other end (2026-09-25). TOI-2570 b
+    2026-09-25: the last 6 frames had the Sun above -12 deg and sky rising 1139 -> 4095 ADU;
+    kept, they carried a noise dip over the QC line (+29 min, depth 2.3% against 1.25%);
+    dropped, the fit failed QC as the floor had predicted (prereg_toi2570_20260925.md, test D).
+
+    Returns (leading, trailing) lists of moved filenames."""
     import shutil
     from astropy.io import fits
     from astropy.time import Time
     from astropy.coordinates import EarthLocation, AltAz, get_sun
     import astropy.units as u
     loc = EarthLocation(lat=float(SITE['lat']) * u.deg, lon=float(SITE['lon']) * u.deg, height=SITE['elev'] * u.m)
+    files = sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS'))
+    lead = twilight_run(ddir, files, loc)
+    trail = twilight_run(ddir, [f for f in reversed(files) if f not in lead], loc)
+    for f in lead + trail:
+        os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
+        shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
+    return lead, sorted(trail)
+
+
+def twilight_run(ddir, ordered, loc):
+    """Frames from the start of `ordered` that are bright (sky above TWILIGHT_SKY) with the Sun
+    at or above TWILIGHT_SUN_ALT, stopping at the first frame that is not. Moves nothing."""
+    from astropy.io import fits
+    from astropy.time import Time
+    from astropy.coordinates import AltAz, get_sun
     moved = []
-    for f in sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS')):
+    for f in ordered:
         data, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
         if med <= TWILIGHT_SKY:
             break
@@ -246,8 +268,6 @@ def set_aside_twilight(ddir):
             sun_alt = None
         if sun_alt is not None and sun_alt < TWILIGHT_SUN_ALT:
             break                       # night-time bright sky (moon, lit cloud): the triage judges it
-        os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
-        shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
         moved.append(f)
     return moved
 
@@ -364,9 +384,10 @@ def main():
             raise SystemExit('  nothing to do')
         got = download(names, ddir)
         say(f'  downloaded {got} new frame(s) to {ddir}')
-    moved = set_aside_twilight(ddir)
-    if moved:
-        say(f'  set aside {len(moved)} leading twilight frame(s) (sky above {TWILIGHT_SKY} ADU) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
+    lead, trail = set_aside_twilight(ddir)
+    for moved, which in ((lead, 'leading'), (trail, 'trailing')):
+        if moved:
+            say(f'  set aside {len(moved)} {which} twilight frame(s) (sky above {TWILIGHT_SKY} ADU, Sun above {TWILIGHT_SUN_ALT} deg) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
     files, jd0, jd1, h0 = window(ddir)
     if not files:
         raise SystemExit('  no usable frames')
