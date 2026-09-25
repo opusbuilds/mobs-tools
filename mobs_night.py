@@ -91,6 +91,7 @@ CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and pho
 # 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
 # 8 min Tmid bar. One night; the number moves again on the next one that bears on it.
 SEED_MIN_ADU = 200
+FORCE_MAX_RATIO = 0.5              # predicted scatter/depth above which a forced no-seed night can't time the transit (TOI-2570 b 09-25)
 # The CEILING. Set 2026-09-22 from HD 189733 b (V 7.67, 8 s exposures): PROCEED on
 # every other gate with its core at DATAMAX in 35/75 alignable frames (45%), 17 of the
 # 37 in-transit frames, and above 90% of full well in 47/75. 90% because a CCD leaves
@@ -658,7 +659,16 @@ def main():
     if above < SEED_MIN_ADU:
         r = f'seed target {above:.0f} ADU above background (< {SEED_MIN_ADU})'
         if seed_clear is not None and seed_clear >= SEED_MIN_ADU:
-            r += f'; ~{seed_clear:.0f} on the clearest frames, so the seed frame is the problem, not the target: --force is reasonable'
+            r += f'; ~{seed_clear:.0f} on the clearest frames, so the seed frame is the problem, not the target'
+            # TOI-2570 b 2026-09-25: this line said '--force is reasonable' unconditionally. Forced,
+            # a 1.25% transit at scatter/depth ~0.9 came back +29 min late and twice too deep with a
+            # QC MARGINAL: a noise dip, confidently fitted. Forcing is only worth it when the night
+            # could time the transit if it were clear (scatter/depth <= FORCE_MAX_RATIO predicted).
+            if scatter and scatter / depth <= FORCE_MAX_RATIO:
+                r += f': --force is reasonable (predicted scatter/depth {scatter / depth:.2f})'
+            else:
+                r += (f': --force would be a test, not a measurement (predicted scatter/depth '
+                      + (f'{scatter / depth:.2f}' if scatter else 'unknown, no V') + f' > {FORCE_MAX_RATIO})')
         elif seed_clear is not None:
             r += f'; ~{seed_clear:.0f} on the clearest frames'
         reasons.append(r)
