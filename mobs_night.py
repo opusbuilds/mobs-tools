@@ -403,6 +403,21 @@ def main():
     # 2. archive
     ar = archive(a.planet)
     depth = 100 * ar['rprs'] ** 2
+    # Cache the archive ephemeris for publish.ts (its vsArchiveMin column) if this planet is not cached yet.
+    # Never overwrite: existing entries may be hand-checked. Added 2026-09-26: 6 of 38 targets had no entry
+    # because nothing wrote the cache automatically (Gaia-2 b was the one that showed it).
+    try:
+        ep = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'ephemerides.json')
+        cache = json.load(open(ep)) if os.path.exists(ep) else {}
+        if ar['planet'] not in cache:
+            cache[ar['planet']] = {'P': ar['P'], 'Perr': ar['Perr'], 'T0': ar['T0'], 'T0err': ar['T0err'], 'T14h': ar['T14h'],
+                                   'depthPct': round(depth, 3), 'fetched': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
+                                   'rprs': ar['rprs'], 'source': 'NASA Exoplanet Archive pscomppars', 'vmag': ar['V']}
+            with open(ep + '.new', 'w') as fh:
+                json.dump(cache, fh, indent=1, sort_keys=True)
+            os.replace(ep + '.new', ep)
+    except Exception as e:
+        say(f'  (ephemeris cache not updated: {e})')
     say(f'  archive: P {ar["P"]:.8f} d, T0 {ar["T0"]:.6f}, T14 {ar["T14h"]:.3f} h, Rp/Rs {ar["rprs"]:.4f} (depth {depth:.2f}%), V {ar["V"]}' + ('' if ar['rprs_from'] == 'pl_ratror' else f' (Rp/Rs derived from {ar["rprs_from"]}; no pl_ratror in pscomppars)')
         + ('' if ar['ars_from'] == 'pl_ratdor' else f' (a/Rs {ar["ars"]:.3f} derived: {ar["ars_from"]}; no pl_ratdor in pscomppars)'))
 
