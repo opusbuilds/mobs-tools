@@ -408,8 +408,10 @@ def main():
     # because nothing wrote the cache automatically (Gaia-2 b was the one that showed it).
     try:
         ep = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'ephemerides.json')
-        cache = json.load(open(ep)) if os.path.exists(ep) else {}
-        if ar['planet'] not in cache:
+        # Only UPDATE an existing cache (opus-infra's exotic/ephemerides.json); never create one, so a copy of
+        # this script elsewhere (e.g. the public mobs-tools repo, where the parent dir is outside the repo) writes nothing.
+        cache = json.load(open(ep)) if os.path.exists(ep) else None
+        if cache is not None and ar['planet'] not in cache:
             cache[ar['planet']] = {'P': ar['P'], 'Perr': ar['Perr'], 'T0': ar['T0'], 'T0err': ar['T0err'], 'T14h': ar['T14h'],
                                    'depthPct': round(depth, 3), 'fetched': datetime.now(timezone.utc).strftime('%Y-%m-%d'),
                                    'rprs': ar['rprs'], 'source': 'NASA Exoplanet Archive pscomppars', 'vmag': ar['V']}
