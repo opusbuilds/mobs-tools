@@ -83,6 +83,14 @@ CAL_SCATTER, CAL_V, CAL_RATIO, CAL_BAR_MIN = 0.84, 11.57, 0.425, 8.2
 # law is now linear and shallow. The bar model was never the problem: fed the
 # observed scatter it predicted 9.1 min for WASP-67 b against 8.6 delivered.
 CAL_SLOPE = 0.05   # percent scatter per magnitude, from the three points above
+# Bar model scale, 2026-09-26. Checked against every fitted row with a posterior bar: actual/predicted
+# has median 0.52 over 17 rows and 0.63 over the 7 since post_run_check (09-02), with a spread of a
+# factor ~1.8 either way (log sd 0.58). The physically grounded alternative, Carter et al. 2008
+# (sigma_T = sigma/depth * sqrt(tau * cadence / 2), tau the ingress time), spread no better (factor 1.85,
+# median actual/pred 2.2): the scatter comes from red noise, free geometry and grazing solutions, not
+# ingress sharpness. So: keep the simple model, correct its bias, and state the honest range.
+CAL_BAR_SCALE = 0.63
+CAL_BAR_SPREAD = 1.8
 CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and photon
                    # noise takes over: HAT-P-54 b (V 13.40, ~60 ADU) gave another
                    # observer 2.6% scatter and a 24 min bar, not the flat law's 0.93%.
@@ -675,7 +683,7 @@ def main():
             scatter *= 10 ** (0.2 * (ar['V'] - CAL_V_KNEE))
     else:
         scatter = None
-    bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN if scatter else None
+    bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN * CAL_BAR_SCALE if scatter else None
 
     # 8. verdict
     reasons = []
@@ -748,8 +756,8 @@ Predictions:
   QC PASS or MARGINAL (not predicting which).   [EDIT: state which if there is a reason]
 - Scatter, from the V-magnitude calibration ({CAL_SCATTER}% at V {CAL_V} on 2026-09-05, +{CAL_SLOPE}%/mag from three clean nights, revised 2026-09-18):
   ~{scatter:.2f}%. On a {depth:.2f}% depth that is scatter/depth {scatter / depth:.2f}; with {CAL_RATIO} giving
-  {CAL_BAR_MIN} min at ~3 min cadence, expected Tmid bar ~{bar:.0f} min (range {0.7 * bar:.0f}-{1.5 * bar:.0f}; two clean nights gave 9.6 and 8.6 against 6.7 and 9.0 predicted, so the bar model is two-point-crude).
-  Under {0.6 * bar:.0f} min: calibration wrong the other way. Over {1.8 * bar:.0f} min: worse night than the counts show.
+  {CAL_BAR_MIN} min at ~3 min cadence, expected Tmid bar ~{bar:.0f} min (x{CAL_BAR_SCALE} bias correction from 17 fitted rows; honest range {bar / CAL_BAR_SPREAD:.0f}-{bar * CAL_BAR_SPREAD:.0f}, the model predicts bars only to a factor ~{CAL_BAR_SPREAD}).
+  Under {bar / 3:.0f} min: calibration wrong the other way. Over {bar * 3:.1f} min: worse night than the counts show (3x is ~2 sigma of the spread).
 - Tmid within 1 sigma (that bar) of {tmid:.5f}.   [EDIT: what a miss would and would not mean]
 - Depth within 1 sigma of {depth:.2f}%; Rp/Rs within 1 sigma of {ar['rprs']:.4f}.
 - If stars-per-frame falls by more than half at any point between {ut(ing)} and {ut(egr)}, or the target is under
