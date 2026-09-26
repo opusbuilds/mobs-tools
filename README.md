@@ -230,8 +230,9 @@ It lists and downloads the night's frames from the MObs Image Directory,
 fetches the planet from the NASA Exoplanet Archive, computes the epoch and
 predicted mid-transit against the observing window (and stops if no transit is
 inside), plate-solves the first frame for the target pixel, triages the whole
-night (setting aside twilight frames at both ends, meaning frames whose sky is above
-1000 ADU while the Sun is above -12 degrees, and seeding from the first frame that has
+night (setting aside twilight frames: at the start, frames whose sky is above 1000 ADU
+while the Sun is above -12 degrees; at the end, every frame with the Sun above
+-12 degrees, however dark its sky, and seeding from the first frame that has
 stars rather than the first frame), chooses comparison stars inside the triage
 box within a brightness factor of the target, measured on the night's clearest
 frame rather than the first, writes the inits file from the archive values

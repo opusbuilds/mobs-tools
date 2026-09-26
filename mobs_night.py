@@ -229,10 +229,11 @@ def set_aside_twilight(ddir):
     on a 402-414 ADU sky and were set aside as "twilight" by the old star-count rule,
     which hid the whole clouded pre-ingress stretch from the triage counts.
 
-    TRAILING (dawn) frames get the same rule from the other end (2026-09-25). TOI-2570 b
-    2026-09-25: the last 6 frames had the Sun above -12 deg and sky rising 1139 -> 4095 ADU;
-    kept, they carried a noise dip over the QC line (+29 min, depth 2.3% against 1.25%);
-    dropped, the fit failed QC as the floor had predicted (prereg_toi2570_20260925.md, test D).
+    TRAILING (dawn) frames are set aside on the Sun alone: every frame at the end with the Sun
+    at or above -12 deg, whatever its sky. TOI-2570 b 2026-09-25: the last 8 frames had the Sun
+    above -12 (sky 453 -> 4095 ADU); kept, they carried a noise dip over the QC line (+29 min,
+    depth 2.3% against 1.25%); dropped, the fit failed QC as the floor had predicted. The two
+    dimmest of them alone were enough to restore it (prereg_toi2570_20260925.md, tests D-F).
 
     Returns (leading, trailing) lists of moved filenames."""
     import shutil
@@ -243,23 +244,28 @@ def set_aside_twilight(ddir):
     loc = EarthLocation(lat=float(SITE['lat']) * u.deg, lon=float(SITE['lon']) * u.deg, height=SITE['elev'] * u.m)
     files = sorted(f for f in os.listdir(ddir) if f.upper().endswith('.FITS'))
     lead = twilight_run(ddir, files, loc)
-    trail = twilight_run(ddir, [f for f in reversed(files) if f not in lead], loc)
+    trail = twilight_run(ddir, [f for f in reversed(files) if f not in lead], loc, need_bright=False)
     for f in lead + trail:
         os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
         shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
     return lead, sorted(trail)
 
 
-def twilight_run(ddir, ordered, loc):
-    """Frames from the start of `ordered` that are bright (sky above TWILIGHT_SKY) with the Sun
-    at or above TWILIGHT_SUN_ALT, stopping at the first frame that is not. Moves nothing."""
+def twilight_run(ddir, ordered, loc, need_bright=True):
+    """Frames from the start of `ordered` with the Sun at or above TWILIGHT_SUN_ALT (and, when
+    need_bright, a sky above TWILIGHT_SKY), stopping at the first frame that is not. Moves nothing.
+
+    The trailing end does not need a bright sky (TOI-2570 b 2026-09-25, tests E and F): two dawn
+    frames at 453 and 607 ADU with ~600 stars, Sun at -12.0 and -10.7 deg, carried the whole
+    forced fit, while dropping two night frames in their place changed nothing. A dim dawn
+    frame is still a rising, changing sky."""
     from astropy.io import fits
     from astropy.time import Time
     from astropy.coordinates import AltAz, get_sun
     moved = []
     for f in ordered:
         data, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
-        if med <= TWILIGHT_SKY:
+        if need_bright and med <= TWILIGHT_SKY:
             break
         # Bright, but is it twilight? Only if the Sun is near the horizon at this frame.
         try:
@@ -267,7 +273,7 @@ def twilight_run(ddir, ordered, loc):
             sun_alt = get_sun(t).transform_to(AltAz(obstime=t, location=loc)).alt.deg
         except Exception:
             sun_alt = None
-        if sun_alt is not None and sun_alt < TWILIGHT_SUN_ALT:
+        if sun_alt is None or sun_alt < TWILIGHT_SUN_ALT:
             break                       # night-time bright sky (moon, lit cloud): the triage judges it
         moved.append(f)
     return moved
@@ -388,7 +394,7 @@ def main():
     lead, trail = set_aside_twilight(ddir)
     for moved, which in ((lead, 'leading'), (trail, 'trailing')):
         if moved:
-            say(f'  set aside {len(moved)} {which} twilight frame(s) (sky above {TWILIGHT_SKY} ADU, Sun above {TWILIGHT_SUN_ALT} deg) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
+            say(f'  set aside {len(moved)} {which} twilight frame(s) (' + (f'sky above {TWILIGHT_SKY} ADU, ' if which == 'leading' else '') + f'Sun above {TWILIGHT_SUN_ALT} deg) to excluded/: {moved[0]}' + (f' .. {moved[-1]}' if len(moved) > 1 else ''))
     files, jd0, jd1, h0 = window(ddir)
     if not files:
         raise SystemExit('  no usable frames')
