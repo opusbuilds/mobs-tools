@@ -225,6 +225,24 @@ TWILIGHT_SUN_ALT = -12.0  # deg. Twilight is a statement about the SUN, not the 
                           # tool then crashed on an empty frame list instead of giving a verdict.
 
 
+def moon_during(jd_list):
+    """(illuminated %, [altitudes in deg]) of the Moon at the given JDs, from the MObs site.
+    Added 2026-09-28 after row 57: a 72% Moon setting across a transit pulled on-time injected
+    transits 6-16 min early with every comparison star, and the ledger's moonlit timing points
+    (Moon up, >50% lit) scatter ~2x their bars (chi2/n 3.9 vs 1.5, n=4 vs 9)."""
+    from astropy.time import Time
+    from astropy.coordinates import EarthLocation, AltAz, get_body, get_sun
+    import astropy.units as u
+    loc = EarthLocation(lat=float(SITE['lat']) * u.deg, lon=float(SITE['lon']) * u.deg, height=SITE['elev'] * u.m)
+    alts = []
+    for jd in jd_list:
+        t = Time(jd, format='jd')
+        alts.append(float(get_body('moon', t, loc).transform_to(AltAz(obstime=t, location=loc)).alt.deg))
+    t = Time(jd_list[len(jd_list) // 2], format='jd')
+    elong = get_sun(t).separation(get_body('moon', t, loc)).rad
+    return 100 * (1 - math.cos(elong)) / 2, alts
+
+
 def set_aside_twilight(ddir):
     """Move LEADING and TRAILING twilight frames (median sky above TWILIGHT_SKY) to <ddir>/excluded,
     stopping at the first night frame. These are not observations of anything and must
@@ -720,6 +738,16 @@ def main():
         reasons.append('exotic -pf failed')
     verdict = 'REJECT' if reasons else 'PROCEED'
     say(f'== verdict: {verdict}' + (': ' + '; '.join(reasons) if reasons else ''))
+    try:  # advisory only: never let it cost the night record or the prereg scaffold
+        moon_pct, moon_alts = moon_during([ing, tmid, egr])
+        moon_flag = moon_pct > 50 and max(moon_alts) > 0
+    except Exception as e:
+        moon_pct, moon_alts, moon_flag = None, [], False
+        say(f'   (moon check failed: {e})')
+    if moon_flag:
+        say(f'   MOONLIT: Moon {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress. '
+            'Before quoting a Tmid, run tools/inject_transit.py on 2-3 comparable constant stars in these frames and reduce them '
+            'identically: on 2026-09-21 a setting Moon pulled on-time injections 6-16 min early (row 57).')
     # Night record for observatory.opusgarden.dev (2026-09-20): what the triage table
     # does not hold. publish.ts pairs it with triage.txt.
     json.dump({'verdict': verdict, 'clauses': reasons,
@@ -767,7 +795,7 @@ Predictions:
 - First-frame coordinates from a local plate solve; drift by star-pair voting; comps in the triage box within a
   brightness factor of the target; #1409 confirms the rest.
 - Not submitted regardless; checkpoint holds.
-""")
+{('- MOONLIT (Moon ' + f'{moon_pct:.0f}' + '% lit, up during the transit): the Tmid is not quoted until an injection test on 2-3 comparable' + chr(10) + '  constant stars in these frames, reduced identically, recovers an injected on-time transit within its bar (row 57).' + chr(10)) if moon_flag else ''}""")
         say(f'  wrote {os.path.relpath(prereg_path, ROOT)} (scaffold; EDIT and commit before any fit)')
     else:
         say(f'  prereg exists, left alone: {os.path.relpath(prereg_path, ROOT)}')
