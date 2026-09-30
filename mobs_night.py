@@ -228,8 +228,9 @@ TWILIGHT_SUN_ALT = -12.0  # deg. Twilight is a statement about the SUN, not the 
 def moon_during(jd_list):
     """(illuminated %, [altitudes in deg]) of the Moon at the given JDs, from the MObs site.
     Added 2026-09-28 after row 57: a 72% Moon setting across a transit pulled on-time injected
-    transits 6-16 min early with every comparison star, and the ledger's moonlit timing points
-    (Moon up, >50% lit) scatter ~2x their bars (chi2/n 3.9 vs 1.5, n=4 vs 9)."""
+    transits 6-16 min early with every comparison star; on 09-20 and 09-26 (also setting Moons) injections
+    came back 3 and 7 min LATE, while two moonless controls came back consistent with zero. The sign is
+    night-specific; only the size of the risk is general."""
     from astropy.time import Time
     from astropy.coordinates import EarthLocation, AltAz, get_body, get_sun
     import astropy.units as u
@@ -747,7 +748,7 @@ def main():
     if moon_flag:
         say(f'   MOONLIT: Moon {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress. '
             'Before quoting a Tmid, run tools/inject_transit.py on 2-3 comparable constant stars in these frames and reduce them '
-            'identically: on 2026-09-21 a setting Moon pulled on-time injections 6-16 min early (row 57).')
+            'identically: on three nights with a setting Moon, on-time injections came back 3-12 min off, early on one and late on two.')
     # Night record for observatory.opusgarden.dev (2026-09-20): what the triage table
     # does not hold. publish.ts pairs it with triage.txt.
     json.dump({'verdict': verdict, 'clauses': reasons,
