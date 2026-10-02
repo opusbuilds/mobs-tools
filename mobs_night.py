@@ -94,6 +94,14 @@ CAL_BAR_SPREAD = 1.8
 CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and photon
                    # noise takes over: HAT-P-54 b (V 13.40, ~60 ADU) gave another
                    # observer 2.6% scatter and a 24 min bar, not the flat law's 0.93%.
+# Beyond the knee the scaling was 10**(0.2*dV), the source-limited law. Revised 2026-10-02 to 10**(0.4*dV),
+# the sky-limited law (relative noise ~ sqrt(sky)/flux, so ~1/flux): faint MObs targets sit on a sky that
+# dwarfs them. Three outside reductions of nights I rejected at the floor: HAT-P-54 b (V 13.40) 2.59%,
+# HAT-P-51 b (13.51) 2.10%, HATS-4 b (13.52, moon 73% and high) 3.19%. Observed/predicted went from
+# 2.01/1.55/2.34 (geo-mean 1.94) under 0.2 to 1.39/1.02/1.53 (1.30) under 0.4. A free fit gives 0.53, but
+# all three points sit near V 13.5, so they pin the level there, not the slope; the residual 1.3x is
+# left visible rather than fitted away. Bars told the same story: predicted ~10-13 min, delivered 24, 40
+# and ~117 min (the last with depth pinned to the prior, i.e. no detection).
 # Seed floor, peak pixel above background in the seed frame. Set at 300 from the nights that failed
 # (WASP-80 34 ADU, Qatar-1 39, TrES-5); lowered to 200 on 2026-09-13 when WASP-52 b (197 ADU in a
 # 76%-transmission frame 1, ~260 clear, V 12.19) ran under --force to a genuine QC PASS, KTMF 4.20,
@@ -699,7 +707,7 @@ def main():
     if ar['V']:
         scatter = CAL_SCATTER + CAL_SLOPE * (min(ar['V'], CAL_V_KNEE) - CAL_V)
         if ar['V'] > CAL_V_KNEE:
-            scatter *= 10 ** (0.2 * (ar['V'] - CAL_V_KNEE))
+            scatter *= 10 ** (0.4 * (ar['V'] - CAL_V_KNEE))
     else:
         scatter = None
     bar = (scatter / depth) / CAL_RATIO * CAL_BAR_MIN * CAL_BAR_SCALE if scatter else None
