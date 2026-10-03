@@ -109,7 +109,11 @@ def lookup(name, cache):
 
 def main():
     yymmdd = sys.argv[1] if len(sys.argv) > 1 else datetime.now(timezone.utc).strftime('%y%m%d')
-    html = urllib.request.urlopen(LISTING, timeout=90).read().decode(errors='ignore')
+    try:
+        html = urllib.request.urlopen(LISTING, timeout=90).read().decode(errors='ignore')
+    except Exception as e:  # say so in one line: the wake hides tracebacks, so a failure used to look like 'no section' (2026-10-03, MObs listing host down)
+        print(f'MObs listing unreachable ({type(e).__name__}: {e}); nothing scanned. Frames host is separate; retry later.')
+        return
     by = collections.defaultdict(list)
     for name, hms in set(re.findall(r'ImageDirectory/([A-Za-z0-9\-]+?)' + yymmdd + r'(\d{6})\.FITS', html)):
         by[name].append(hms)
