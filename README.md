@@ -22,11 +22,13 @@ instead of after.
 | `pointing_clock.py` | was the telescope's clock right that night? (a physical check; the header's own time fields cannot answer it) | when a mid-time is suspicious |
 | `indep_tmid.py` | what does an independent sampler get on the same detrended points? | called by `post_run_check.py`, or on its own |
 | `mobs_night.py` | all of the above, in order, from a target name and a date | one command per night |
+| `inject_transit.py` | does this night, through this pipeline, time a transit correctly? (plant a known one and see when it comes back) | when a mid-time surprises you |
 
 ## Install
 
     pip install numpy astropy photutils emcee
     pip install exotic          # only for post_run_check.py / indep_tmid.py
+    pip install pylightcurve    # only for inject_transit.py (comes with exotic; downloads its databases on first import)
 
 `locate_target.py` and `check_inits.py` plate-solve locally with
 [astrometry.net](https://astrometry.net/use.html): `apt install astrometry.net`
@@ -251,6 +253,62 @@ lines are meant to be edited and committed before any fit runs. The tool does
 the mechanical part so that the part that needs a person is the only part left.
 Paths are relative to the repo it lives in (`data/`, `output/`, and the inits and
 prereg files one level up); `--data-dir` points it at frames already on disk.
+
+## inject_transit.py
+
+    python3 inject_transit.py SRC_DIR OUT_DIR X Y TMID_BJD_TDB inits.json [--ld a,b,c,d] [--radius 10] [--no-verify]
+
+The first thing to try when a mid-transit time surprises you. It writes a copy of
+the night's frames with a transit of known mid-time planted on a constant field
+star at (X, Y), then you reduce the copy exactly as you reduced the night, with
+that star as the target, and see whether the transit comes back on time. X and
+Y are pixel positions in the first frame by sorted file name (chronological for
+MObs), the same frame EXOTIC's "Target Star X & Y Pixel" refers to; a star must
+be detected within 3 px of them there.
+
+The transit goes into the pixels, not into a photometry file, on purpose. A
+timing bias can live in the reduction itself (sky subtraction, aperture,
+comparison choice). A fake transit added after photometry skips those steps and
+only tests the fitter.
+
+In each frame it finds the star, measures the local sky (median of a 15-25 px
+ring, fixed whatever the radius), and multiplies only the star's light above that sky, within `--radius`
+px, by the model flux at the frame's mid-exposure time (BJD_TDB). Nothing else in
+the frame changes. Planet parameters and the site come from the inits file (the
+orbit is circular); limb darkening defaults to HAT-P-32's four Claret
+coefficients, `--ld` sets your own. A symmetric transit shape cannot shift the
+mid-time, so a limb-darkening mismatch affects depth, not timing. Afterwards it
+checks its own work: the star's flux above sky, edited over original, must
+match the model in every frame (within 1%, plus integer-rounding noise), no
+pixel outside the radius may change, and no frame may be left uninjected (a
+star that is not found, drifts within the radius of the chip edge, or shows too
+little light above sky fails the check). Exit 1 if not.
+That proves the edit is on disk as intended; it cannot prove you chose the right
+star, time or model. Times are checked before anything is written. It never
+writes into the source folder, a link to it, or a folder nested with it.
+
+How to use it as a test:
+
+1. Pick three or more isolated, unsaturated field stars that stay on the chip
+   all night, about as bright as your target, and not your comparison stars.
+2. Inject at the predicted mid-time (or the middle of the frames, with baseline
+   on both sides), one output folder per star.
+3. Copy your inits file for each: the output folder as the FITS directory, the
+   injected star as the target, the same comparisons, and the injected time as
+   `Published Mid-Transit Time (BJD-UTC)` (the night's own ephemeris works too,
+   as long as the injected time sits well inside its prior). Reduce.
+4. Also reduce each star once WITHOUT injection (same inits, original frames).
+   A star with a dip or trend of its own near the injected time will drag the
+   injected fit; on one test this caught a star whose own faint dip sat five
+   minutes from the planted transit.
+5. Decide what counts before you run, and list the outcomes, not just the
+   thresholds: three stars and two thresholds leave room for a result that fits
+   neither.
+
+On HAT-P-32 b's night of 2026-09-21 (Moon setting through the transit), transits
+planted on time came back 6 to 12 minutes early (6 to 16 when each comparison
+star was forced alone), which is how a "12 minutes early"
+planet turned out to be the night's sky. The ledger has the full story.
 
 ## Provenance
 
