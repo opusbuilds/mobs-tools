@@ -65,14 +65,28 @@ if sel:
     sm = re.search(r'#(\d+) - \[([\d.]+), ([\d.]+)\]', sel[-1])
     if sm:
         n, cx, cy = sm.group(1), sm.group(2), sm.group(3)
+        # Use the last line that carries the reject counts. Since dev16x EXOTIC prints a second, later line per
+        # comparison WITHOUT them, and taking cov[-1] made this whole check vanish silently (TOI-2570 b 2026-10-04:
+        # comparison #6 at 63/101 frames, 37 overexposure rejects, and no warning printed).
         cov = [l for l in lines if re.search(rf'Comp {n}\b.*\(x={cx}, y={cy}\).*coverage=', l)]
-        cm = re.search(r'coverage=(\d+) valid frame\(s\) out of (\d+) total.*?psf_quality_rejects=(\d+)', cov[-1]) if cov else None
-        if cm:
+        pat = r'coverage=(\d+) valid frame\(s\) out of (\d+) total.*?psf_quality_rejects=(\d+)(?:, overexposure_rejects=(\d+))?'
+        cms = [m for m in (re.search(pat, l) for l in cov) if m]
+        if cms:
+            cm = cms[-1]
             a_, b_, rej = int(cm.group(1)), int(cm.group(2)), int(cm.group(3))
-            line = f'transit-fit comparison #{n} ({cx},{cy}): coverage {a_}/{b_} frames, {rej} PSF rejects'
+            over = cm.group(4)
+            line = f'transit-fit comparison #{n} ({cx},{cy}): coverage {a_}/{b_} frames, {rej} PSF rejects' + (f' ({over} of them overexposure)' if over else '')
             if a_ < 0.9 * b_:
                 line += ' -- WARN partial-coverage comparison; the fit lost frames. Refit with a full-coverage comparison before quoting Tmid.'
+            if over and int(over) > 0.1 * b_:
+                line += ' -- WARN the comparison saturates in over a tenth of the frames.'
             verdict.append(line)
+        else:
+            verdict.append(f'transit-fit comparison #{n} ({cx},{cy}): COULD NOT READ its coverage from the log (format changed?); check it by hand before quoting Tmid.')
+    else:
+        verdict.append('transit-fit comparison: COULD NOT PARSE the selected-comparison line from the log; check coverage by hand.')
+else:
+    verdict.append('transit-fit comparison: no "Transit Fit Comparison Star" line in the log; coverage not checked.')
 
 if fired and not a.no_refit and csvs:
     bounds = fp.get('Pre-UltraNest LM boundary scout final bounds')
