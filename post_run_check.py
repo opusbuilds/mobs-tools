@@ -69,12 +69,20 @@ if sel:
         # comparison WITHOUT them, and taking cov[-1] made this whole check vanish silently (TOI-2570 b 2026-10-04:
         # comparison #6 at 63/101 frames, 37 overexposure rejects, and no warning printed).
         cov = [l for l in lines if re.search(rf'Comp {n}\b.*\(x={cx}, y={cy}\).*coverage=', l)]
-        pat = r'coverage=(\d+) valid frame\(s\) out of (\d+) total.*?psf_quality_rejects=(\d+)(?:, overexposure_rejects=(\d+))?'
-        cms = [m for m in (re.search(pat, l) for l in cov) if m]
+        # EXOTIC omits psf_quality_rejects / overexposure_rejects when they are zero, so both are optional; a line that
+        # carries 'reason=' is a complete per-comparison line even without them.
+        def parse(l):
+            m = re.search(r'coverage=(\d+) valid frame\(s\) out of (\d+) total', l)
+            if not m or ('psf_quality_rejects=' not in l and 'reason=' not in l):
+                return None
+            pr = re.search(r'psf_quality_rejects=(\d+)', l); ov = re.search(r'overexposure_rejects=(\d+)', l)
+            return int(m.group(1)), int(m.group(2)), int(pr.group(1)) if pr else 0, ov.group(1) if ov else None, bool(pr)
+        parsed = [r for r in (parse(l) for l in cov) if r]
+        # Prefer the last line that carries reject counts: later stages repeat the comparison WITHOUT them, which reads
+        # as 'zero rejects' and hid a 37-frame overexposure (TOI-2570 10-04) twice. Count-free lines only as a fallback.
+        cms = [r for r in parsed if r[4]] or parsed
         if cms:
-            cm = cms[-1]
-            a_, b_, rej = int(cm.group(1)), int(cm.group(2)), int(cm.group(3))
-            over = cm.group(4)
+            a_, b_, rej, over, _ = cms[-1]
             line = f'transit-fit comparison #{n} ({cx},{cy}): coverage {a_}/{b_} frames, {rej} PSF rejects' + (f' ({over} of them overexposure)' if over else '')
             if a_ < 0.9 * b_:
                 line += ' -- WARN partial-coverage comparison; the fit lost frames. Refit with a full-coverage comparison before quoting Tmid.'
