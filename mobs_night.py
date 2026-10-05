@@ -91,6 +91,8 @@ CAL_SLOPE = 0.05   # percent scatter per magnitude, from the three points above
 # ingress sharpness. So: keep the simple model, correct its bias, and state the honest range.
 CAL_BAR_SCALE = 0.63
 CAL_BAR_SPREAD = 1.8
+SAT_ADU = 4095      # MObs frames are 12-bit
+SAT_FRAC = 0.8      # refuse comparisons whose clearest-frame peak reaches 80% of saturation (seeing varies frame to frame)
 CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and photon
                    # noise takes over: HAT-P-54 b (V 13.40, ~60 ADU) gave another
                    # observer 2.6% scatter and a 24 min bar, not the flat law's 0.93%.
@@ -500,7 +502,7 @@ def main():
             f'seeding from frame {start + 1} ({files[start]}) and grading them in the triage')
     loc, solved_on = None, None
     for i in range(start, min(start + 6, len(files))):
-        rc, out, err = run_tool('locate_target.py', [os.path.join(ddir, files[i]), '--ra', str(ar['ra']), '--dec', str(ar['dec']), '--json', '--comps', '14'])
+        rc, out, err = run_tool('locate_target.py', [os.path.join(ddir, files[i]), '--ra', str(ar['ra']), '--dec', str(ar['dec']), '--json', '--comps', '60'])
         if rc == 0:
             loc, solved_on = json.loads(out), i
             break
@@ -622,12 +624,27 @@ def main():
         # Qatar-1 09-14 when the seed frame changed).
         seed_clear, _ = seed_above_bg(ratio_frame, tx + cx_off, ty + cy_off)
         say(f'  comparison ratios measured on the clearest frame, {best[0]} (target {tflux:.0f} ADU in 5 px, {seed_clear:.0f} ADU peak above background)')
+    # Refuse comparisons that come near saturation (2026-10-05). TOI-2570 b 10-04: no star was within range, the
+    # fallback took the nearest-in-brightness ones (~10x the target), and the one EXOTIC used was overexposed in 37
+    # of 101 frames; the forced fit came back 50 min early while an outside reduction of the same frames was on time.
+    # Peak is the raw pixel maximum near the star on the clearest frame (the most transparent one, so the worst case).
+    cands = []
+    for c in loc['comparisons']:
+        xi, yi = int(round(c['x'] + cx_off)), int(round(c['y'] + cy_off))
+        cut = d0[max(yi - 3, 0):yi + 4, max(xi - 3, 0):xi + 4]
+        c['peak'] = float(cut.max()) if cut.size else float('nan')
+        if c['peak'] >= SAT_FRAC * SAT_ADU:
+            continue
+        cands.append(c)
+    if len(cands) < len(loc['comparisons']):
+        say(f'  dropped {len(loc["comparisons"]) - len(cands)} candidate comparison(s) peaking at or above '
+            f'{SAT_FRAC:.0%} of {SAT_ADU} ADU on the clearest frame (saturation risk)')
     box = tg.get('box', (16, 634, 16, 484))
-    comps, in_range = choose_comps(loc['comparisons'], tflux, box, lo, hi, a.ncomps)
+    comps, in_range = choose_comps(cands, tflux, box, lo, hi, a.ncomps)
     say(f'  comps: {len(comps)} chosen in box x[{box[0]},{box[1]}] y[{box[2]},{box[3]}]'
         + ('' if in_range else f'  NONE within {lo}-{hi}x of the target; nearest taken, flagged'))
     for c in comps:
-        say(f'    ({c["x"]:6.1f}, {c["y"]:6.1f})  {c["flux"] / tflux if tflux > 0 else float("nan"):6.2f}x target')
+        say(f'    ({c["x"]:6.1f}, {c["y"]:6.1f})  {c["flux"] / tflux if tflux > 0 else float("nan"):6.2f}x target, peak {c.get("peak", float("nan")):.0f} ADU')
 
     ra_s, dec_s = sexa(ar['ra'], ar['dec'])
     inits = {
