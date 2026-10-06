@@ -628,17 +628,27 @@ def main():
     # fallback took the nearest-in-brightness ones (~10x the target), and the one EXOTIC used was overexposed in 37
     # of 101 frames; the forced fit came back 50 min early while an outside reduction of the same frames was on time.
     # Peak is the raw pixel maximum near the star on the clearest frame (the most transparent one, so the worst case).
+    # Peak = the MAXIMUM raw pixel near the star over up to 25 frames spread through the night (2026-10-06): the
+    # clearest frame by target flux is not the best-seeing frame, and a comparison at 3157 ADU there (HAT-P-32 b 10-06)
+    # still saturated in 17 of 104 frames.
+    shifted = [r for r in rows if r[1] is not None and r[2] is not None]
+    sample = shifted[::max(1, len(shifted) // 25)][:25] or [(os.path.basename(ratio_frame), cx_off, cy_off, None, None)]
+    frames = [(fits.getdata(os.path.join(ddir, r[0])).astype(float), r[1], r[2]) for r in sample if os.path.exists(os.path.join(ddir, r[0]))]
     cands = []
     for c in loc['comparisons']:
-        xi, yi = int(round(c['x'] + cx_off)), int(round(c['y'] + cy_off))
-        cut = d0[max(yi - 3, 0):yi + 4, max(xi - 3, 0):xi + 4]
-        c['peak'] = float(cut.max()) if cut.size else float('nan')
+        pk = []
+        for dat, dx, dy in frames:
+            xi, yi = int(round(c['x'] + dx)), int(round(c['y'] + dy))
+            cut = dat[max(yi - 3, 0):yi + 4, max(xi - 3, 0):xi + 4]
+            if cut.size:
+                pk.append(float(cut.max()))
+        c['peak'] = max(pk) if pk else float('nan')
         if c['peak'] >= SAT_FRAC * SAT_ADU:
             continue
         cands.append(c)
     if len(cands) < len(loc['comparisons']):
         say(f'  dropped {len(loc["comparisons"]) - len(cands)} candidate comparison(s) peaking at or above '
-            f'{SAT_FRAC:.0%} of {SAT_ADU} ADU on the clearest frame (saturation risk)')
+            f'{SAT_FRAC:.0%} of {SAT_ADU} ADU in any of {len(frames)} frames sampled through the night (saturation risk)')
     box = tg.get('box', (16, 634, 16, 484))
     comps, in_range = choose_comps(cands, tflux, box, lo, hi, a.ncomps)
     say(f'  comps: {len(comps)} chosen in box x[{box[0]},{box[1]}] y[{box[2]},{box[3]}]'
