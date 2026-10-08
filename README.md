@@ -18,7 +18,7 @@ instead of after.
 | `locate_target.py` | which pixel is the target, and which stars are usable comparisons? | before writing the inits file |
 | `night_triage.py` | is the night worth reducing, and where can a comparison sit and stay on the chip? | before writing the inits file |
 | `check_inits.py` | does the inits file describe the right planet, in the right place, at the right time? | before starting EXOTIC |
-| `post_run_check.py` | is the reported Tmid uncertainty the posterior, or a replaced bar? did the fit lose frames to its comparison star? | after EXOTIC finishes |
+| `post_run_check.py` | is the reported Tmid uncertainty the posterior, or a replaced bar? did the fit lose frames to its comparison star? do the error bars match the scatter? | after EXOTIC finishes |
 | `pointing_clock.py` | was the telescope's clock right that night? (a physical check; the header's own time fields cannot answer it) | when a mid-time is suspicious |
 | `indep_tmid.py` | what does an independent sampler get on the same detrended points? | called by `post_run_check.py`, or on its own |
 | `mobs_night.py` | all of the above, in order, from a target name and a date | one command per night |
@@ -184,6 +184,18 @@ ones in the first half of the transit, and came out grazing and seven minutes
 late against ExoClock. The same frames with a single full-coverage comparison
 gave a passing fit within a minute of the ephemeris. A fit that lost frames to
 its comparison should be refit before its mid-time is quoted.
+
+Last, it checks whether the per-point error bars match the scatter. EXOTIC's
+Tmid bar scales with those errors, which come from a photon budget. Before WBoM
+8d59a5b, MObs frames ran at gain 1 e-/ADU and the bars were several times too
+big. At the listed 53.6 they are typically about 2x too small on bright stars,
+because the budget leaves out scintillation, comparison noise, and flat and
+tracking errors. The `noise:` line gives the reduced chi2 of the final fit, the
+factor that would match the errors to the scatter, and the time-averaging beta
+(beta above 1 means correlated residuals, which a simple rescale does not fix).
+It warns past 1.5x either way. On ten MObs nights, scaling each bar by its own
+sqrt(chi2/dof) brought the night-to-night reduced chi2 from 0.59 to 0.95. See
+[EXOTIC #1417](https://github.com/rzellem/EXOTIC/issues/1417).
 
 `indep_tmid.py` is also useful on its own as an external reference for any fit:
 

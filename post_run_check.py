@@ -96,6 +96,40 @@ if sel:
 else:
     verdict.append('transit-fit comparison: no "Transit Fit Comparison Star" line in the log; coverage not checked.')
 
+# Do the per-point errors match the scatter? The posterior bar scales with them. MObs HAT-P-32 b 9/21 at gain 53.6:
+# median error 0.36%, residual scatter 0.68%, chi2/dof 3.8, so the bar was ~1.9x too small; at gain 1 it was ~6x too big
+# (EXOTIC #1417). beta is the time-averaging factor: binned-residual rms over the white-noise expectation, averaged over
+# bin sizes 2-10; beta > 1 means correlated noise that no per-point rescale captures. Informational: exit code unchanged.
+if csvs:
+    try:
+        import numpy as np
+        hdr = [l for l in open(csvs[-1]) if l.startswith('#') and 'Uncertainty' in l][-1].lstrip('# ').strip().split(',')
+        cols = [hdr.index('Flux'), hdr.index('Uncertainty'), hdr.index('Model')]
+        f, e, mo = np.genfromtxt(csvs[-1], delimiter=',', comments='#', usecols=cols, ndmin=2).T
+        ok = np.isfinite(f) & np.isfinite(e) & np.isfinite(mo) & (e > 0)
+        if (~ok).any():
+            verdict.append(f'noise: dropped {int((~ok).sum())} rows with non-finite values or zero error before the check.')
+        f, e, mo = f[ok], e[ok], mo[ok]
+        if len(f) <= 8:
+            raise ValueError(f'only {len(f)} usable points')
+        r = f - mo; n = len(r); chi = float(((r / e) ** 2).sum() / (n - 4))
+        betas = []
+        for N in range(2, 11):
+            k = n // N
+            if k >= 5:
+                b = r[:k * N].reshape(k, N).mean(1)
+                betas.append(np.std(b) / (np.std(r) / np.sqrt(N) * np.sqrt(k / (k - 1))))
+        beta = float(np.mean(betas)) if betas else float('nan')
+        line = (f'noise: {n} points, median error {100*np.median(e):.3f}%, residual scatter {100*np.std(r):.3f}%, '
+                f'chi2/dof {chi:.2f} (errors x{np.sqrt(chi):.2f} to match), beta {beta:.2f}')
+        if chi > 2.25 or chi < 0.25:
+            line += f' -- WARN the per-point errors are off by more than 1.5x; the Tmid bar is off by about x{np.sqrt(chi):.1f} too (scale it before quoting).'
+        if beta > 1.3:
+            line += ' -- WARN correlated residuals (beta > 1.3): the bar is too small even after a per-point rescale.'
+        verdict.append(line)
+    except Exception as ex:
+        verdict.append(f'noise: COULD NOT READ the final light curve ({type(ex).__name__}: {ex}); check chi2/dof by hand.')
+
 if fired and not a.no_refit and csvs:
     bounds = fp.get('Pre-UltraNest LM boundary scout final bounds')
     cmd = [sys.executable, os.path.join(os.path.dirname(__file__), 'indep_tmid.py'), a.inits, csvs[-1], '--nwalk', '40', '--nstep', '4000']
