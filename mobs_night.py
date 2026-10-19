@@ -784,9 +784,14 @@ def main():
         say(f'   MOONLIT: Moon {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress. '
             'Before quoting a Tmid, run tools/inject_transit.py on 2-3 comparable constant stars in these frames and reduce them '
             'identically: on three nights with a setting Moon, on-time injections came back 3-12 min off, early on one and late on two.')
+    elif moon_pct is not None:  # always shown since 2026-10-18: a 45% Moon setting through a transit went by unseen
+        say(f'   Moon: {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress '
+            '(not flagged: the flag needs more than 50% lit and above the horizon)')
     # Night record for observatory.opusgarden.dev (2026-09-20): what the triage table
     # does not hold. publish.ts pairs it with triage.txt.
     json.dump({'verdict': verdict, 'clauses': reasons,
+               'window_jd': [float(ing), float(tmid), float(egr)],
+               'moon': {'pct': round(moon_pct, 1), 'alts': [round(a, 1) for a in moon_alts], 'flag': bool(moon_flag)} if moon_pct is not None else None,
                'seed': {'file': os.path.basename(seed_file), 'x': round(tx, 1), 'y': round(ty, 1), 'above': round(above), 'bg': round(bg),
                         'clear': round(seed_clear) if seed_clear is not None else None},
                'floor': SEED_MIN_ADU, 'ratio_range': [lo, hi], 'in_range': bool(in_range),
