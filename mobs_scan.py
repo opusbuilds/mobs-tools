@@ -23,6 +23,15 @@ Nothing here downloads a frame or submits anything anywhere.
 import json, os, re, sys, urllib.parse, urllib.request, collections
 from datetime import datetime, timezone
 
+# MObs's listing began refusing Python-urllib's default User-Agent with 403 on 2026-10-21; every fetch here identifies
+# itself instead (an honest UA, not a browser disguise).
+UA = 'mobs-tools/1.0 (+https://github.com/opusbuilds/mobs-tools)'
+def _ua_urlopen(url, *a, **kw):
+    if isinstance(url, str):
+        url = urllib.request.Request(url, headers={'User-Agent': UA})
+    return urllib.request.urlopen(url, *a, **kw)
+
+
 def _urlopen_retry(url, timeout, tries=2):
     """The NASA Exoplanet Archive occasionally stalls for a full timeout and then
     answers the next request in two seconds (first seen 2026-09-13 from the home
@@ -30,7 +39,7 @@ def _urlopen_retry(url, timeout, tries=2):
     import time
     for i in range(tries):
         try:
-            return urllib.request.urlopen(url, timeout=timeout)
+            return _ua_urlopen(url, timeout=timeout)
         except (TimeoutError, OSError) as e:
             if i == tries - 1:
                 raise
@@ -95,7 +104,7 @@ def lookup(name, cache):
         # the archive's alias service, as EXOTIC does since #1412 (HAT-P-10 b -> WASP-11 b)
         for c in candidates(name)[:3]:
             try:
-                a = json.loads(urllib.request.urlopen(ALIAS + urllib.parse.quote(c), timeout=30).read().decode())
+                a = json.loads(_ua_urlopen(ALIAS + urllib.parse.quote(c), timeout=30).read().decode())
             except Exception:
                 continue
             resolved = ((a.get('manifest') or {}).get('resolved_name')) or None
@@ -110,7 +119,7 @@ def lookup(name, cache):
 def main():
     yymmdd = sys.argv[1] if len(sys.argv) > 1 else datetime.now(timezone.utc).strftime('%y%m%d')
     try:
-        html = urllib.request.urlopen(LISTING, timeout=90).read().decode(errors='ignore')
+        html = _ua_urlopen(LISTING, timeout=90).read().decode(errors='ignore')
     except Exception as e:  # say so in one line: the wake hides tracebacks, so a failure used to look like 'no section' (2026-10-03, MObs listing host down)
         print(f'MObs listing unreachable ({type(e).__name__}: {e}); nothing scanned. Frames host is separate; retry later.')
         return

@@ -23,6 +23,15 @@ import numpy as np
 from astropy.io import fits
 from astropy.wcs import WCS
 
+# MObs's listing began refusing Python-urllib's default User-Agent with 403 on 2026-10-21; every fetch here identifies
+# itself instead (an honest UA, not a browser disguise).
+UA = 'mobs-tools/1.0 (+https://github.com/opusbuilds/mobs-tools)'
+def _ua_urlopen(url, *a, **kw):
+    if isinstance(url, str):
+        url = urllib.request.Request(url, headers={'User-Agent': UA})
+    return urllib.request.urlopen(url, *a, **kw)
+
+
 def _urlopen_retry(url, timeout, tries=2):
     """The NASA Exoplanet Archive occasionally stalls for a full timeout and then
     answers the next request in two seconds (first seen 2026-09-13 from the home
@@ -30,7 +39,7 @@ def _urlopen_retry(url, timeout, tries=2):
     import time
     for i in range(tries):
         try:
-            return urllib.request.urlopen(url, timeout=timeout)
+            return _ua_urlopen(url, timeout=timeout)
         except (TimeoutError, OSError) as e:
             if i == tries - 1:
                 raise

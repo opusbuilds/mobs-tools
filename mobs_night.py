@@ -37,6 +37,15 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 from night_triage import frame_time, detect, voted_shift  # noqa: E402
 
+# MObs's listing began refusing Python-urllib's default User-Agent with 403 on 2026-10-21; every fetch here identifies
+# itself instead (an honest UA, not a browser disguise).
+UA = 'mobs-tools/1.0 (+https://github.com/opusbuilds/mobs-tools)'
+def _ua_urlopen(url, *a, **kw):
+    if isinstance(url, str):
+        url = urllib.request.Request(url, headers={'User-Agent': UA})
+    return urllib.request.urlopen(url, *a, **kw)
+
+
 def _urlopen_retry(url, timeout, tries=2):
     """The NASA Exoplanet Archive occasionally stalls for a full timeout and then
     answers the next request in two seconds (first seen 2026-09-13 from the home
@@ -44,7 +53,7 @@ def _urlopen_retry(url, timeout, tries=2):
     import time
     for i in range(tries):
         try:
-            return urllib.request.urlopen(url, timeout=timeout)
+            return _ua_urlopen(url, timeout=timeout)
         except urllib.error.HTTPError as e:
             # 2026-09-17: the archive put a Cloudflare browser challenge in front
             # of TAP/sync (403, cf-mitigated: challenge). A real browser passes it;
@@ -131,7 +140,7 @@ def say(s=''):
 
 # ---------------------------------------------------------------- 1. frames
 def listing_names(target, yymmdd):
-    html = urllib.request.urlopen(LISTING, timeout=90).read().decode(errors='ignore')
+    html = _ua_urlopen(LISTING, timeout=90).read().decode(errors='ignore')
     pat = re.compile(r'ImageDirectory/(' + re.escape(target) + yymmdd + r'\d{6})\.FITS')
     return sorted(set(pat.findall(html)))
 
@@ -149,7 +158,7 @@ def download(names, ddir):
         url = FITS_URL.format(name=n)
         for attempt in range(2):
             try:
-                data = urllib.request.urlopen(url, timeout=120, context=ctx).read()
+                data = _ua_urlopen(url, timeout=120, context=ctx).read()
                 break
             except urllib.error.URLError as e:
                 if 'CERTIFICATE' in str(e).upper() and ctx is ctx_ok:
