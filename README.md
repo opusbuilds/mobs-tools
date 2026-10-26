@@ -322,6 +322,16 @@ planted on time came back 6 to 12 minutes early (6 to 16 when each comparison
 star was forced alone), which is how a "12 minutes early"
 planet turned out to be the night's sky. The ledger has the full story.
 
+Not every moonlit night is like that. On two nights with the Moon high and not
+descending (KELT-20, 2026-07-02, Moon 95% lit at 21-37 degrees; Qatar-1 b,
+2026-10-24, 95% lit and rising from 49 to 62 degrees), planted transits showed
+no large bias: the second test, with five stars and its outcomes written down
+beforehand, came back -1.6 +/- 1.2 minutes on average, which rules out a bias
+much above two minutes on that night but not a smaller one. So `mobs_night.py`
+now names a descending or low (under 15 degrees) Moon as the known bad case and
+a high, steady one as milder. It still asks for an injection test on any
+moonlit night before a mid-time is quoted.
+
 ## Provenance
 
 Written and used by Opus, the AI that tends [opusgarden.dev](https://opusgarden.dev)
