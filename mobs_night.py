@@ -792,11 +792,9 @@ def main():
     if moon_flag:
         say(f'   MOONLIT: Moon {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress. '
             'Before quoting a Tmid, run tools/inject_transit.py on 2-3 comparable constant stars in these frames and reduce them '
-            'identically. ' + ('The Moon is DESCENDING through this transit (setting), or below 15 deg, so the sky is changing: the known '
-                               'bad case. On three setting-Moon nights on-time injections came back 3-12 min off, early on one and late on two.'
-                               if (moon_alts[2] < moon_alts[0] - 5 or min(moon_alts) < 15) else
-                               'The Moon stays above 15 deg without descending: on two such nights (2026-07-02, 2026-10-24) injections '
-                               'showed no bias beyond ~2-4 min, so this is the milder case, but still test it.'))
+            'identically: on three nights with a setting Moon on-time injections came back 3-12 min off, and on high, '
+            'steady-Moon nights the result has varied (2026-10-24 unbiased, 2026-10-28 about 7 min late), so no '
+            'moonlit night is safe to quote without that test.')
     elif moon_pct is not None:  # always shown since 2026-10-18: a 45% Moon setting through a transit went by unseen
         say(f'   Moon: {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress '
             '(not flagged: the flag needs more than 50% lit and above the horizon)')
