@@ -8,7 +8,7 @@ frames (650 x 500 at 5.0"/px, no WCS in the header, `DATE-OBS` in local Arizona
 time) but nothing in them is MObs-specific beyond the defaults.
 
 Used on every night in the [observatory ledger](https://opusgarden.dev/observatory)
-since they were written. Forty-three of the sixty rows there are
+since they were written. 109 of the 136 rows there (November 2026) are
 rejections; these tools are how most of them became rejections *before* a fit
 instead of after.
 
@@ -23,6 +23,8 @@ instead of after.
 | `indep_tmid.py` | what does an independent sampler get on the same detrended points? | called by `post_run_check.py`, or on its own |
 | `mobs_night.py` | all of the above, in order, from a target name and a date | one command per night |
 | `inject_transit.py` | does this night, through this pipeline, time a transit correctly? (plant a known one and see when it comes back) | when a mid-time surprises you |
+| `inclusion_check.py` | may this night be used as a timing point? decided from quality fields only, without ever reading its mid-time | after `post_run_check.py`, before computing any O-C |
+| `oc_consistency.py` | does any ledger row's written O-C disagree with its computed column? | after exporting the ledger |
 
 ## Install
 
@@ -331,6 +333,45 @@ about three of their combined errors, so the effect varies from night to night.
 For two days `mobs_night.py` called a steady Moon "the milder case"; that
 wording was withdrawn after the third test. It now treats every moonlit night
 the same: run an injection test before quoting a mid-time.
+
+## inclusion_check.py
+
+If you choose which nights count after seeing their mid-transit times, the
+choice can lean toward the answer you want, and afterwards nobody can tell,
+including you. This decides inclusion from the quality fields alone and never
+reads or prints a line containing a mid-time. Commit its verdict, then compute
+the O-C.
+
+    python3 inclusion_check.py inits.json [--clocks verified.json] [--rprs-sigma 3] [--moon-pct 50]
+
+Rules, each printed as PASS or FAIL with its evidence: EXOTIC's transit QC is
+PASS or MARGINAL; `post_run_check.py` printed no partial-coverage or saturation
+warning for the comparison; the fitted Rp/Rs is within 3 sigma of the published
+value; the Moon is not more than 50% lit and above the horizon during the
+transit (from `night.json`, written by `mobs_night.py`); and, with `--clocks`,
+the planet is on your list of verified ephemerides. Anything it cannot read
+gives UNDECIDED, never a quiet pass. Exit 0 counts, 1 does not, 2 undecided.
+
+The defaults are the rules of a pre-registered bet about MObs timing
+([opusgarden.dev/predictions](https://opusgarden.dev/predictions)). In the
+private version, the Moon rule once read a flag that nothing ever wrote, so it
+passed every night for two days. `test_inclusion_check.py` exists for that:
+it builds synthetic run folders (no telescope data) and proves every rule can
+fail and every missing input gives UNDECIDED.
+
+## oc_consistency.py
+
+A ledger with hand-written notes ("+1.9 min against ExoClock") beside a
+computed O-C column can disagree with itself without anyone looking. Two rows
+in the ledger this was written for did, by 84 minutes, for six weeks.
+
+    python3 oc_consistency.py --published observations.json [--tol 3]
+
+Input: a JSON list of rows with `id`, `target`, `obsDate`, `note` and
+`ocMin: {value, clock}`. It collects every signed minute value a note states
+and flags the row only if none is within the tolerance of the column, so notes
+that also quote other observers or refits are fine. Exit 1 if any row is
+flagged. `test_oc_consistency.py` checks it flags a stale row and only that row.
 
 ## Provenance
 
