@@ -13,7 +13,8 @@ Rules (each prints PASS or FAIL with its evidence):
   - the Moon is not MOONLIT: more than --moon-pct lit AND above the horizon at ingress, mid or egress
     (computed for the MicroObservatory site from the transit window in <frames dir>/night.json, written by
     mobs_night.py);
-  - optionally (--clocks FILE: a JSON list of planet names), the target has a verified ephemeris you trust.
+  - optionally (--clocks FILE: a JSON list of planet names, or ledger.py's clocks dict), the target has a verified
+    ephemeris you trust.
 Anything it cannot read makes the verdict UNDECIDED rather than passing quietly.
 
 Exit 0 = counts, 1 = not a point, 2 = could not decide.
@@ -24,7 +25,7 @@ import argparse, glob, json, os, re, sys
 
 ap = argparse.ArgumentParser(usage=__doc__.split('usage: ')[1].split('\n')[0])
 ap.add_argument('inits')
-ap.add_argument('--clocks', help='JSON list of planet names with a verified ephemeris (optional rule)')
+ap.add_argument('--clocks', help='JSON list of planet names with a verified ephemeris, or the clocks dict ledger.py uses (optional rule)')
 ap.add_argument('--rprs-sigma', type=float, default=3.0)
 ap.add_argument('--moon-pct', type=float, default=50.0)
 a = ap.parse_args()

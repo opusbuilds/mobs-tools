@@ -25,6 +25,7 @@ instead of after.
 | `inject_transit.py` | does this night, through this pipeline, time a transit correctly? (plant a known one and see when it comes back) | when a mid-time surprises you |
 | `inclusion_check.py` | may this night be used as a timing point? decided from quality fields only, without ever reading its mid-time | after `post_run_check.py`, before computing any O-C |
 | `oc_consistency.py` | does any ledger row's written O-C disagree with its computed column? | after exporting the ledger |
+| `ledger.py` | one row per night, rejected nights included, with the rules that keep the record honest; exports JSON with O-C | after every night |
 
 ## Install
 
@@ -372,6 +373,45 @@ Input: a JSON list of rows with `id`, `target`, `obsDate`, `note` and
 and flags the row only if none is within the tolerance of the column, so notes
 that also quote other observers or refits are fine. Exit 1 if any row is
 flagged. `test_oc_consistency.py` checks it flags a stale row and only that row.
+
+## ledger.py
+
+A record of every night, not just the good ones. Most nights a small telescope
+takes are unusable, and a folder of successes cannot show how often that is or
+why. Each night is a row in a SQLite file; a rejected row has to name one of
+seven reasons (cloud, floor, no comparison, partial, no transit, saturated,
+qc fail).
+
+    python3 ledger.py add --target "HAT-P-32 b" --date 2026-11-03 \
+        --tmid 2461347.7731 --tmid-err 0.00095 --bar-scale 1.00 --rprs 0.146 --scatter 0.479 --note "..."
+    python3 ledger.py add --target "WASP-44 b" --date 2026-10-30 --status rejected --reason cloud --note "..."
+    python3 ledger.py crosscheck --id 1 --source "observer A" --tmid 2461347.7746 --tmid-err 0.0037
+    python3 ledger.py append --id 1 --note "refit with a single comparison: ..."
+    python3 ledger.py reason --id 2 --reason partial
+    python3 ledger.py export --out site/data --clocks clocks.json
+    python3 ledger.py list
+
+`--db FILE` (default `ledger.db`) goes before the command. Statuses: reduced (the
+default), validation, submitted, rejected.
+
+It refuses an unknown flag, a rejected row without a reason, and a timed row
+without `--bar-scale` (the factor `post_run_check.py` prints to make the error
+bars match the scatter; the ledger stores the printed bar times that factor,
+and keeps both). `append` checks the note actually grew. `export` writes
+`observations.json` and `crosschecks.json`, refuses to drop a night the last
+export had (or whose last export it cannot read), and, given a clocks file, adds each timed row's O-C in minutes,
+which is what `oc_consistency.py` reads:
+
+    {"HAT-P-32 b": {"t0": 2456819.856194, "t0Err": 3.5e-5, "period": 2.150008096,
+                    "periodErr": 4.8e-8, "source": "ExoClock, Kokori et al. 2025"}}
+
+The same file works as `inclusion_check.py --clocks` (which also accepts a plain
+list of names; the ledger needs the dict). The clock bar adds the t0 and period
+terms in quadrature, ignoring their covariance. By convention, cross-checks are
+other observers' reductions of the same frames, under anonymous labels, never
+names; the ledger does not enforce that, you do.
+`test_ledger.py` proves each rule can fail and that the export feeds
+`oc_consistency.py` (it reproduces a real night's O-C, -0.21 min).
 
 ## Provenance
 

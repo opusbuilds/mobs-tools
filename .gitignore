@@ -1,3 +1,4 @@
 __pycache__/
 *.pyc
 .mobs_scan_cache.json
+ledger.db
