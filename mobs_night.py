@@ -33,7 +33,9 @@ import numpy as np
 from datetime import datetime, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+# Where data/, output/ and run files go: $MOBS_ROOT if set; the parent of tools/ when run from a tools/ directory;
+# otherwise the current directory (an installed copy must never write into its install prefix).
+ROOT = os.environ.get('MOBS_ROOT') or (os.path.dirname(HERE) if os.path.basename(HERE) == 'tools' else os.getcwd())
 sys.path.insert(0, HERE)
 from night_triage import frame_time, detect, voted_shift  # noqa: E402
 

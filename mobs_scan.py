@@ -50,8 +50,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 LISTING = 'https://waps.cfa.harvard.edu/microobservatory/MOImageDirectory/ImageDirectory.php?SortBy=Filename&SortPos=DESC'
 TAP = 'https://exoplanetarchive.ipac.caltech.edu/TAP/sync?'
 ALIAS = 'https://exoplanetarchive.ipac.caltech.edu/cgi-bin/Lookup/nph-aliaslookup.py?objname='
-CACHE = os.path.join(HERE, '.mobs_scan_cache.json')
-LISTINGS = os.path.join(os.path.dirname(HERE), 'listings')
+# Same root rule as mobs_night.py: $MOBS_ROOT, else the parent of tools/, else the current directory.
+ROOT = os.environ.get('MOBS_ROOT') or (os.path.dirname(HERE) if os.path.basename(HERE) == 'tools' else os.getcwd())
+CACHE = os.path.join(HERE if os.path.basename(HERE) == 'tools' else ROOT, '.mobs_scan_cache.json')
+LISTINGS = os.path.join(ROOT, 'listings')
 MIN_FRAMES = 10
 
 

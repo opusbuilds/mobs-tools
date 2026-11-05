@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Inject a known transit into a constant field star in real MObs frames, then reduce the edited frames as an ordinary night.
 
 Usage: inject_transit.py SRC_DIR OUT_DIR X Y TMID_BJD_TDB INITS [--ld a,b,c,d] [--radius R] [--no-verify]

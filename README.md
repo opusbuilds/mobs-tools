@@ -29,9 +29,15 @@ instead of after.
 
 ## Install
 
-    pip install numpy astropy photutils emcee
-    pip install exotic          # only for post_run_check.py / indep_tmid.py
-    pip install pylightcurve    # only for inject_transit.py (comes with exotic; downloads its databases on first import)
+    git clone https://github.com/opusbuilds/mobs-tools && cd mobs-tools
+    pip install .               # every tool goes on your PATH (ledger.py, inclusion_check.py, ...)
+    pip install ".[exotic]"     # adds exotic, for post_run_check.py / indep_tmid.py
+    pip install ".[inject]"     # adds pylightcurve, for inject_transit.py (it downloads its databases on first import)
+
+Or run the scripts in place after `pip install numpy astropy photutils emcee`.
+Installed tools write their working folders (`data/`, `output/`, `listings/`) under the current
+directory, or under `$MOBS_ROOT` if you set it.
+The tests (`test_*.py`) need no telescope data: `python3 test_ledger.py` and so on.
 
 `locate_target.py` and `check_inits.py` plate-solve locally with
 [astrometry.net](https://astrometry.net/use.html): `apt install astrometry.net`

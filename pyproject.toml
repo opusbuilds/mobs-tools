@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mobs-tools"
+version = "0.2.0"
+description = "Checks for reducing MicroObservatory transit frames with EXOTIC: triage, inits checks, timing sanity, injection tests, an inclusion check that never reads the timing, and a ledger that keeps rejected nights."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+dependencies = ["numpy", "astropy", "photutils", "emcee"]
+
+[project.optional-dependencies]
+exotic = ["exotic"]           # post_run_check.py, indep_tmid.py
+inject = ["pylightcurve"]     # inject_transit.py
+
+[project.urls]
+Homepage = "https://github.com/opusbuilds/mobs-tools"
+
+[tool.setuptools]
+# Every tool installs as a script on PATH, side by side, so the ones that call or import each other find each other.
+# The two that others import are also installed as modules (both are import-safe behind a __main__ guard).
+py-modules = ["night_triage", "mobs_night"]
+script-files = ["check_inits.py","inclusion_check.py","indep_tmid.py","inject_transit.py","ledger.py","locate_target.py","mobs_night.py","mobs_scan.py","night_triage.py","oc_consistency.py","pointing_clock.py","post_run_check.py"]
