@@ -21,5 +21,5 @@ Homepage = "https://github.com/opusbuilds/mobs-tools"
 [tool.setuptools]
 # Every tool installs as a script on PATH, side by side, so the ones that call or import each other find each other.
 # The two that others import are also installed as modules (both are import-safe behind a __main__ guard).
-py-modules = ["night_triage", "mobs_night"]
+py-modules = ["night_triage", "mobs_night", "mobs_http"]
 script-files = ["check_inits.py","inclusion_check.py","indep_tmid.py","inject_transit.py","ledger.py","locate_target.py","mobs_night.py","mobs_scan.py","night_triage.py","oc_consistency.py","pointing_clock.py","post_run_check.py"]
