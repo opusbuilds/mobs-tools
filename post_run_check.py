@@ -89,6 +89,23 @@ if sel:
             if over and int(over) > 0.1 * b_:
                 line += ' -- WARN the comparison saturates in over a tenth of the frames.'
             verdict.append(line)
+            # 2026-11-08, informational only (no WARN, and a prefix bet_inclusion.py / inclusion_check.py do not read):
+            # split the selected comparison's lost frames into those even the best-covered comparison lost (likely
+            # frame-wide: cloud, pointing; counts only, so not proof the frames are the same ones) and the rest
+            # (comparison-specific: PSF rejects, saturation, edge). The partial-coverage WARN
+            # above cannot tell them apart; on four 2026 nights it fired on cloud alone.
+            per = {}
+            for l in lines:
+                mm = re.search(r'Comp (\d+)\b.*\(x=([\d.]+), y=([\d.]+)\).*coverage=', l)
+                r = parse(l) if mm else None
+                if r and (r[4] or mm.group(1) not in per):
+                    per[mm.group(1)] = r
+            if per:
+                best = max(r[0] for r in per.values())
+                verdict.append(f'coverage breakdown: {b_ - best} of {b_} frames missing even from the best-covered comparison '
+                               f'(likely frame-wide), {best - a_} more missing from the selected one only (comparison-specific); '
+                               f'best comparison {best}/{b_}, {len(per)} comparisons read'
+                               + (' (one comparison only: the split is not informative)' if len(per) == 1 else ''))
         else:
             verdict.append(f'transit-fit comparison #{n} ({cx},{cy}): COULD NOT READ its coverage from the log (format changed?); check it by hand before quoting Tmid.')
     else:

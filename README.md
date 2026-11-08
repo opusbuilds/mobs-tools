@@ -194,6 +194,15 @@ late against ExoClock. The same frames with a single full-coverage comparison
 gave a passing fit within a minute of the ephemeris. A fit that lost frames to
 its comparison should be refit before its mid-time is quoted.
 
+The warning cannot tell two causes apart: a comparison that lost frames on its
+own (PSF rejects, saturation, the chip edge), and cloud or pointing that took the
+same frames from every star. So a `coverage breakdown:` line follows it, splitting
+the lost frames into those missing even from the best-covered comparison (likely
+frame-wide) and those missing from the selected one only. It is informational: no
+warning is attached, and `inclusion_check.py` does not read it. On the WASP-52 b
+night above it reads 1 frame-wide and 10 comparison-specific; on a cloudy WASP-35 b
+night, 13 and 0. It counts frames, not which frames, so "likely" is the honest word.
+
 Last, it checks whether the per-point error bars match the scatter. EXOTIC's
 Tmid bar scales with those errors, which come from a photon budget. Before WBoM
 8d59a5b, MObs frames ran at gain 1 e-/ADU and the bars were several times too
