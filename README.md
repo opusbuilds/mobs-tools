@@ -278,6 +278,11 @@ comparison, pre-flight failure). `--run`
 launches EXOTIC detached with `post_run_check.py` appended, and refuses on a
 REJECT unless `--force`.
 
+Exit codes: 0 PROCEED, 3 a deliberate REJECT (the data cannot support a timing), 1 an
+error (the archive unreachable, a failed plate solve, a crash). Keeping REJECT apart from
+errors matters when the tool runs unattended: a scheduler that treats every non-zero exit
+as a failure would otherwise report bad sky as broken software.
+
 The verdict is advisory and the pre-registration is a scaffold: the judgment
 lines are meant to be edited and committed before any fit runs. The tool does
 the mechanical part so that the part that needs a person is the only part left.

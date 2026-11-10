@@ -39,6 +39,11 @@ ROOT = os.environ.get('MOBS_ROOT') or (os.path.dirname(HERE) if os.path.basename
 sys.path.insert(0, HERE)
 from night_triage import frame_time, detect, voted_shift  # noqa: E402
 
+# Exit codes: 0 PROCEED, 3 a deliberate REJECT (the data cannot support a timing: too faint, star-poor, no transit in
+# the window), 1 an error (archive down, plate solve failed, crash). Until 2026-11-10 a REJECT exited 1 like a crash,
+# so a rejected night and an HTTP 503 looked the same to systemd, to the host's dashboard and to the wake prompt.
+REJECT_EXIT = 3
+
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from mobs_http import UA, _ua_urlopen, _urlopen_retry  # noqa: E402  (one shared copy, 2026-11-07)
 
@@ -446,7 +451,7 @@ def main():
         f'baseline pre {pre_min:.0f} min, post {post_min:.0f} min; ephemeris bar {eph_err_min:.1f} min')
     if egr < jd0 or ing > jd1:
         if not a.force:
-            raise SystemExit('  no transit inside the window; nothing to reduce')
+            print('  no transit inside the window; nothing to reduce'); raise SystemExit(REJECT_EXIT)
         say('  NO TRANSIT inside the window by the archive ephemeris; continuing under --force '
             '(a fit here is an extrapolation and the verdict will say so)')
         coverage = 'none'
@@ -471,7 +476,7 @@ def main():
                f'(moonlight or lit cloud), {min(stars)}-{max(stars)} stars')
         say(f'== verdict: REJECT: {why}; '
             f'transit window {ut(ing)}-{ut(egr)} UT inside a {ut(jd0)}-{ut(jd1)} night')
-        raise SystemExit(1)
+        raise SystemExit(REJECT_EXIT)
     if start:
         say(f'  first {start} frame(s) have fewer than {MIN_SEED_STARS} stars on a night-dark sky (cloud or an empty field); '
             f'seeding from frame {start + 1} ({files[start]}) and grading them in the triage')
@@ -822,7 +827,7 @@ Predictions:
     if a.run:
         if verdict == 'REJECT' and not a.force:
             say('   --run refused on a REJECT verdict (use --force to override)')
-            return 1
+            return REJECT_EXIT
         script = os.path.join(ROOT, f'{slug}_{date[4:]}_run.sh')
         rel = os.path.relpath(inits_path, ROOT)
         open(script, 'w').write(f"""#!/bin/bash
@@ -837,7 +842,7 @@ echo "=== post_run_check exit=$? ===" >> {os.path.basename(log_path)}
         subprocess.Popen(['setsid', 'nohup', script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         say(f'   launched detached: {os.path.basename(script)} -> {os.path.basename(log_path)}; '
             f'wait for "post_run_check exit" in the log')
-    return 0 if verdict == 'PROCEED' else 1
+    return 0 if verdict == 'PROCEED' else REJECT_EXIT
 
 
 if __name__ == '__main__':
