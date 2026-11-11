@@ -275,7 +275,8 @@ from a V-magnitude scatter calibration, records the verdict and its numbers as
 `night.json` beside the frames, and prints it: PROCEED, or REJECT with the
 numbers (seed target too faint, too many in-transit frames lost, no usable
 comparison, pre-flight failure). `--run`
-launches EXOTIC detached with `post_run_check.py` appended, and refuses on a
+launches EXOTIC detached (in the foreground when itself inside a systemd service such as a
+bin/job unit, whose cgroup is killed on exit) with `post_run_check.py` appended, and refuses on a
 REJECT unless `--force`.
 
 Exit codes: 0 PROCEED, 3 a deliberate REJECT (the data cannot support a timing), 1 an

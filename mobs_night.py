@@ -23,7 +23,10 @@ Steps, each of which is an existing tool in this directory:
      editing and committing BEFORE any fit
   8. a triage verdict: proceed or reject, with the numbers. With --run and a
      proceed verdict, launch EXOTIC detached (setsid) with post_run_check.py
-     appended, exactly as the hand-written run scripts did.
+     appended, exactly as the hand-written run scripts did. Inside a systemd
+     service (read from /proc/self/cgroup; cron.service excepted) it runs in the
+     foreground instead, because the unit's cgroup is killed when it exits; from
+     anything with a time limit, start it with bin/job.
 
 The verdict is advisory. The inits file is written either way; --run refuses on
 a reject verdict unless --force. Nothing here submits anything anywhere.
@@ -373,6 +376,20 @@ def choose_comps(cands, target_flux, box, lo, hi, n):
 
 
 # ------------------------------------------------------------------- main
+def service_unit():
+    """The systemd service this process runs inside, if detaching from it is unsafe; None otherwise.
+    Read from the cgroup, not the environment (sudo and env -i clear INVOCATION_ID but not the cgroup).
+    cron.service is exempt: it outlives its jobs, so a detached child survives a cron session."""
+    try:
+        path = open('/proc/self/cgroup').read().strip().splitlines()[-1].split(':', 2)[2]
+    except (OSError, IndexError):
+        return None
+    leaf = path.rstrip('/').rsplit('/', 1)[-1]
+    if leaf.endswith('.service') and leaf != 'cron.service':
+        return leaf
+    return None
+
+
 def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument('target', help='MObs target name as in the listing, e.g. Qatar-1, WASP-2, HAT-P-10')
@@ -382,7 +399,7 @@ def main():
     p.add_argument('--out-root', default=os.path.join(ROOT, 'output'))
     p.add_argument('--ncomps', type=int, default=6)
     p.add_argument('--ratio', default='0.15,8', help='comparison/target brightness range accepted')
-    p.add_argument('--run', action='store_true', help='launch EXOTIC detached if the verdict is proceed')
+    p.add_argument('--run', action='store_true', help='launch EXOTIC if the verdict is proceed (detached; in the foreground inside a systemd service)')
     p.add_argument('--no-pf', action='store_true', help="skip EXOTIC's own pre-flight (exotic -pf), the slow plate-solving step")
     p.add_argument('--force', action='store_true', help='run even on a reject verdict, and carry a night with no transit in its window past step 3')
     p.add_argument('--no-download', action='store_true')
@@ -834,14 +851,35 @@ Predictions:
 cd {ROOT}
 echo "=== {ar['planet']} {date} run start $(date -u +%FT%TZ) ===" >> {os.path.basename(log_path)}
 venv/bin/exotic -red {rel} -ov >> {os.path.basename(log_path)} 2>&1
-echo "=== {ar['planet']} {date} run end $(date -u +%FT%TZ) exit=$? ===" >> {os.path.basename(log_path)}
+erc=$?
+echo "=== {ar['planet']} {date} run end $(date -u +%FT%TZ) exit=$erc ===" >> {os.path.basename(log_path)}
 venv/bin/python tools/post_run_check.py {rel} >> {os.path.basename(log_path)} 2>&1
-echo "=== post_run_check exit=$? ===" >> {os.path.basename(log_path)}
+prc=$?
+echo "=== post_run_check exit=$prc ===" >> {os.path.basename(log_path)}
+# Exit non-zero only on a real failure: EXOTIC failed, or post_run_check found no run (2) or crashed (4).
+# post_run_check exit 1 means a check fired (a WARN to read), which is a verdict, not an error.
+[ "$erc" -ne 0 ] && exit 1
+[ "$prc" -ge 2 ] && exit 1
+exit 0
 """)
         os.chmod(script, 0o755)
-        subprocess.Popen(['setsid', 'nohup', script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-        say(f'   launched detached: {os.path.basename(script)} -> {os.path.basename(log_path)}; '
-            f'wait for "post_run_check exit" in the log')
+        unit = service_unit()
+        if unit:
+            # Inside a systemd service a detached child does not escape: setsid leaves the cgroup unchanged,
+            # and systemd kills the unit's cgroup when its main process exits, so the run died within a second
+            # (2026-11-11, Qatar-1 b under bin/job). Run it in the foreground; the unit then lives as long as the run.
+            say(f'   running in the foreground (inside {unit}): {os.path.basename(script)} -> {os.path.basename(log_path)}')
+            if not unit.startswith('opus-job-'):
+                say('   WARNING: not a bin/job unit; if this caller has a time limit (a doorbell session\'s Bash tool), '
+                    'the run dies with it. Start it with bin/job instead.')
+            rc = subprocess.run([script]).returncode
+            say(f'   run script exit {rc} (non-zero: EXOTIC failed, or post_run_check found no run or crashed; WARNs are in the log)')
+            if rc:
+                return 1
+        else:
+            subprocess.Popen(['setsid', 'nohup', script], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            say(f'   launched detached: {os.path.basename(script)} -> {os.path.basename(log_path)}; '
+                f'wait for "post_run_check exit" in the log')
     return 0 if verdict == 'PROCEED' else REJECT_EXIT
 
 

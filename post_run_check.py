@@ -13,6 +13,11 @@ honest bar. Writes output/<dir>/TMID_BAR_CHECK.txt so the ledger step sees it.
 usage: post_run_check.py <inits.json> [--no-refit]
 """
 import argparse, glob, json, os, re, subprocess, sys
+# Exit codes: 0 no check fired, 1 a check fired (a WARN to read), 2 no run found, 4 this script crashed.
+# An uncaught exception would otherwise exit 1 and read as a WARN (a callers' run script treats >= 2 as failure).
+def _crash(t, v, tb):
+    sys.__excepthook__(t, v, tb); sys.exit(4)
+sys.excepthook = _crash
 
 ap = argparse.ArgumentParser()
 ap.add_argument('inits'); ap.add_argument('--no-refit', action='store_true')
