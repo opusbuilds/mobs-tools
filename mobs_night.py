@@ -237,6 +237,20 @@ def moon_during(jd_list):
     return 100 * (1 - math.cos(elong)) / 2, alts
 
 
+
+def moon_separation(jd, ra_deg, dec_deg):
+    """Angle in degrees between the Moon and the target at JD, from the MObs site (topocentric Moon).
+    Added 2026-11-13 so every night records it: steady-Moon injection tests so far biased WASP-50 b at 40 deg and
+    left Qatar-1 b unbiased at 74 deg (Rob's question, 2026-10-28, whether closeness matters; values checked against
+    a JPL Horizons Moon position, after an earlier lost script had given 27 and 77). Kept apart from
+    moon_during, which the calibration bet's inclusion rule imports unchanged."""
+    from astropy.time import Time
+    from astropy.coordinates import EarthLocation, SkyCoord, get_body
+    import astropy.units as u
+    loc = EarthLocation(lat=float(SITE['lat']) * u.deg, lon=float(SITE['lon']) * u.deg, height=SITE['elev'] * u.m)
+    moon = get_body('moon', Time(jd, format='jd'), loc)
+    return float(moon.separation(SkyCoord(ra_deg * u.deg, dec_deg * u.deg, frame='icrs')).deg)
+
 def set_aside_twilight(ddir):
     """Move LEADING and TRAILING twilight frames (median sky above TWILIGHT_SKY) to <ddir>/excluded,
     stopping at the first night frame. These are not observations of anything and must
@@ -774,23 +788,30 @@ def main():
     try:  # advisory only: never let it cost the night record or the prereg scaffold
         moon_pct, moon_alts = moon_during([ing, tmid, egr])
         moon_flag = moon_pct > 50 and max(moon_alts) > 0
+        try:
+            moon_sep = moon_separation(tmid, float(ar['ra']), float(ar['dec']))
+        except Exception as e2:
+            moon_sep = None
+            say(f'   (moon separation failed: {e2})')
     except Exception as e:
-        moon_pct, moon_alts, moon_flag = None, [], False
+        moon_pct, moon_alts, moon_flag, moon_sep = None, [], False, None
         say(f'   (moon check failed: {e})')
+    sep_txt = f', {moon_sep:.0f} deg from the target at mid-transit' if moon_sep is not None else ''
     if moon_flag:
-        say(f'   MOONLIT: Moon {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress. '
+        say(f'   MOONLIT: Moon {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress{sep_txt}. '
             'Before quoting a Tmid, run tools/inject_transit.py on 2-3 comparable constant stars in these frames and reduce them '
             'identically: on three nights with a setting Moon on-time injections came back 3-12 min off, and on high, '
             'steady-Moon nights the result has varied (2026-10-24 unbiased, 2026-10-28 about 7 min late), so no '
             'moonlit night is safe to quote without that test.')
     elif moon_pct is not None:  # always shown since 2026-10-18: a 45% Moon setting through a transit went by unseen
-        say(f'   Moon: {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress '
+        say(f'   Moon: {moon_pct:.0f}% lit, altitude {moon_alts[0]:+.0f}/{moon_alts[1]:+.0f}/{moon_alts[2]:+.0f} deg at ingress/mid/egress{sep_txt} '
             '(not flagged: the flag needs more than 50% lit and above the horizon)')
     # Night record for observatory.opusgarden.dev (2026-09-20): what the triage table
     # does not hold. publish.ts pairs it with triage.txt.
     json.dump({'verdict': verdict, 'clauses': reasons,
                'window_jd': [float(ing), float(tmid), float(egr)],
-               'moon': {'pct': round(moon_pct, 1), 'alts': [round(a, 1) for a in moon_alts], 'flag': bool(moon_flag)} if moon_pct is not None else None,
+               'moon': {'pct': round(moon_pct, 1), 'alts': [round(a, 1) for a in moon_alts], 'flag': bool(moon_flag),
+                        'sep_deg': round(moon_sep, 1) if moon_sep is not None else None} if moon_pct is not None else None,
                'seed': {'file': os.path.basename(seed_file), 'x': round(tx, 1), 'y': round(ty, 1), 'above': round(above), 'bg': round(bg),
                         'clear': round(seed_clear) if seed_clear is not None else None},
                'floor': SEED_MIN_ADU, 'ratio_range': [lo, hi], 'in_range': bool(in_range),
