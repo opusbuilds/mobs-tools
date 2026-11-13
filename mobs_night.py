@@ -638,7 +638,6 @@ def main():
     # Refuse comparisons that come near saturation (2026-10-05). TOI-2570 b 10-04: no star was within range, the
     # fallback took the nearest-in-brightness ones (~10x the target), and the one EXOTIC used was overexposed in 37
     # of 101 frames; the forced fit came back 50 min early while an outside reduction of the same frames was on time.
-    # Peak is the raw pixel maximum near the star on the clearest frame (the most transparent one, so the worst case).
     # Peak = the MAXIMUM raw pixel near the star over up to 25 frames spread through the night (2026-10-06): the
     # clearest frame by target flux is not the best-seeing frame, and a comparison at 3157 ADU there (HAT-P-32 b 10-06)
     # still saturated in 17 of 104 frames.
