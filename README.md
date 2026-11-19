@@ -279,6 +279,14 @@ launches EXOTIC detached (in the foreground when itself inside a systemd service
 bin/job unit, whose cgroup is killed on exit) with `post_run_check.py` appended, and refuses on a
 REJECT unless `--force`.
 
+Verified ephemerides (both mobs_night.py and mobs_scan.py): if a clocks file exists, a planet listed in it is timed
+from that ephemeris instead of the NASA archive's linear one, and mobs_night prints how far the archive's prediction
+is from it. Path: `--clocks FILE` (mobs_night only), else `$MOBS_CLOCKS`, else `clocks.json` in the working root, so a
+stray `clocks.json` in the current directory is picked up. Format, as `ledger.py --clocks`:
+`{"WASP-10 b": {"t0": 2456853.689643, "t0Err": 7.2e-5, "period": 3.0927278, "periodErr": 1.2e-7, "source": "ExoClock"}}`.
+Why: for WASP-10 b the archive's ephemeris ran 104 min late against ExoClock's in November 2026, and full transits
+were rejected as partial. Without a clocks file nothing changes.
+
 Exit codes: 0 PROCEED, 3 a deliberate REJECT (the data cannot support a timing), 1 an
 error (the archive unreachable, a failed plate solve, a crash). Keeping REJECT apart from
 errors matters when the tool runs unattended: a scheduler that treats every non-zero exit

@@ -148,6 +148,30 @@ def download(names, ddir):
 
 
 # --------------------------------------------------------------- 2. archive
+def load_clock(planet, path=None):
+    """A verified transit ephemeris for planet from a clocks JSON file, or None. The file is the dict form
+    {"Planet b": {"t0": BJD_TDB, "t0Err": d, "period": d, "periodErr": d, "source": "..."}} that ledger.py --clocks
+    reads. Path: --clocks, else $MOBS_CLOCKS, else <root>/clocks.json if it exists. Added 2026-11-18: the NASA archive's
+    linear ephemeris for WASP-10 b ran 104 min late against ExoClock's verified one (its own stated error: 35 min), so a
+    full transit was rejected as partial; a comparison with another observer's triage (Umbra) caught it."""
+    explicit = path or os.environ.get('MOBS_CLOCKS')
+    path = explicit or os.path.join(ROOT, 'clocks.json')
+    if not os.path.exists(path):
+        if explicit:   # a clocks file that was asked for and is missing must not silently mean "use the archive"
+            raise SystemExit(f'  clocks file {path} not found')
+        return None
+    try:
+        allc = json.load(open(path))
+    except Exception as e:
+        say(f'  WARNING: clocks file {path} unreadable ({type(e).__name__}: {e}); using the archive ephemeris')
+        return None
+    c = allc.get(planet) if isinstance(allc, dict) else None
+    if not c or not c.get('t0') or not c.get('period'):
+        say(f'  (no verified clock for {planet} in {os.path.basename(path)}; archive ephemeris)')
+        return None
+    return c
+
+
 def archive(planet):
     cols = ('pl_name,hostname,pl_orbper,pl_orbpererr1,pl_tranmid,pl_tranmiderr1,pl_trandur,pl_ratror,pl_ratrorerr1,'
             'pl_ratdor,pl_ratdorerr1,pl_orbincl,pl_orbinclerr1,pl_orbeccen,pl_orblper,st_teff,st_tefferr1,st_tefferr2,'
@@ -417,6 +441,7 @@ def main():
     p.add_argument('--no-pf', action='store_true', help="skip EXOTIC's own pre-flight (exotic -pf), the slow plate-solving step")
     p.add_argument('--force', action='store_true', help='run even on a reject verdict, and carry a night with no transit in its window past step 3')
     p.add_argument('--no-download', action='store_true')
+    p.add_argument('--clocks', help='JSON of verified ephemerides (ledger.py format); default $MOBS_CLOCKS or <root>/clocks.json')
     p.add_argument('--data-dir', help='use this existing frame directory instead of data/<target>_<date>')
     a = p.parse_args()
     lo, hi = (float(v) for v in a.ratio.split(','))
@@ -471,7 +496,19 @@ def main():
     say(f'  archive: P {ar["P"]:.8f} d, T0 {ar["T0"]:.6f}, T14 {ar["T14h"]:.3f} h, Rp/Rs {ar["rprs"]:.4f} (depth {depth:.2f}%), V {ar["V"]}' + ('' if ar['rprs_from'] == 'pl_ratror' else f' (Rp/Rs derived from {ar["rprs_from"]}; no pl_ratror in pscomppars)')
         + ('' if ar['ars_from'] == 'pl_ratdor' else f' (a/Rs {ar["ars"]:.3f} derived: {ar["ars_from"]}; no pl_ratdor in pscomppars)'))
 
-    # 3. timing
+    # 3. timing. A verified clock (ExoClock) replaces the archive's ephemeris when one is given, for the geometry, the
+    # inits and the prereg alike; the archive's prediction is printed beside it so a large disagreement is visible.
+    clk = load_clock(ar['planet'], a.clocks)
+    ar['ephem_source'] = 'NASA Exoplanet Archive pscomppars'
+    if clk:
+        aT0, aP = ar['T0'], ar['P']
+        ar['T0'], ar['P'] = float(clk['t0']), float(clk['period'])
+        ar['T0err'], ar['Perr'] = float(clk.get('t0Err') or ar['T0err']), float(clk.get('periodErr') or ar['Perr'])
+        ar['ephem_source'] = clk.get('source') or 'clocks file'
+        nc = round(((jd0 + jd1) / 2 - ar['T0']) / ar['P']); tclk = ar['T0'] + nc * ar['P']
+        na = round((tclk - aT0) / aP)   # the archive's prediction of the SAME transit, not of the window midpoint
+        say(f'  clock: {ar["ephem_source"]} (P {ar["P"]:.8f}, T0 {ar["T0"]:.6f}); the archive ephemeris predicts '
+            f'{(aT0 + na * aP - tclk) * 1440:+.1f} min from it for this transit')
     n = round(((jd0 + jd1) / 2 - ar['T0']) / ar['P'])
     tmid = ar['T0'] + n * ar['P']
     half = ar['T14h'] / 48.0
@@ -483,7 +520,7 @@ def main():
     if egr < jd0 or ing > jd1:
         if not a.force:
             print('  no transit inside the window; nothing to reduce'); raise SystemExit(REJECT_EXIT)
-        say('  NO TRANSIT inside the window by the archive ephemeris; continuing under --force '
+        say(f'  NO TRANSIT inside the window by the ephemeris ({ar["ephem_source"]}); continuing under --force '
             '(a fit here is an extrapolation and the verdict will say so)')
         coverage = 'none'
     else:
@@ -678,7 +715,7 @@ def main():
                                 f'Triage (tools/night_triage.py): clear {tg.get("clear")}, partial {tg.get("partial")}, lost {tg.get("lost")}; '
                                 f'shift range dx {tg.get("shift", ("?",) * 4)[:2]} dy {tg.get("shift", ("?",) * 4)[2:]} px. '
                                 f'Seed from a local plate solve of frame {solved_on + 1 if solved_on else 1}' + (f' ({ref_frame} leading star-poor frames set aside after triage)' if ref_frame else '') + '; comps chosen to stay on the chip through the full shift range. '
-                                f'Archive ephemeris Tmid {tmid:.5f} ({ut(tmid)} UT), {geometry_note}'
+                                f'Predicted Tmid {tmid:.5f} ({ut(tmid)} UT, {ar["ephem_source"]}), {geometry_note}'
                                 f'Pre-registered (prereg_{slug}_{date}.md). Reduced by Opus (AI); not submitted.'),
             'Plate Solution? (y/n)': 'n', 'Add Comparison Stars from AAVSO? (y/n)': 'n',
             'Target Star X & Y Pixel': [int(round(tx)), int(round(ty))],
@@ -809,6 +846,7 @@ def main():
     # does not hold. publish.ts pairs it with triage.txt.
     json.dump({'verdict': verdict, 'clauses': reasons,
                'window_jd': [float(ing), float(tmid), float(egr)],
+               'ephemeris': {'source': ar['ephem_source'], 'T0': ar['T0'], 'P': ar['P']},
                'moon': {'pct': round(moon_pct, 1), 'alts': [round(a, 1) for a in moon_alts], 'flag': bool(moon_flag),
                         'sep_deg': round(moon_sep, 1) if moon_sep is not None else None} if moon_pct is not None else None,
                'seed': {'file': os.path.basename(seed_file), 'x': round(tx, 1), 'y': round(ty, 1), 'above': round(above), 'bg': round(bg),
@@ -832,7 +870,7 @@ def main():
 SCAFFOLD from tools/mobs_night.py. Edit the judgment lines, then commit BEFORE any fit.
 
 Frames: {len(files)}, {ut(jd0)} to {ut(jd1)} UT, {h0.get('EXPTIME')} s {h0.get('FILTER')}.
-Archive (NEA pscomppars, fetched {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC): P {ar['P']:.8f} +/- {ar['Perr']:.1e} d,
+Ephemeris: {ar['ephem_source']}; other parameters: NASA archive pscomppars (fetched {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC). P {ar['P']:.8f} +/- {ar['Perr']:.1e} d,
 T0 {ar['T0']:.6f} +/- {ar['T0err']:.1e}, T14 {ar['T14h']:.3f} h, Rp/Rs {ar['rprs']:.4f} (depth {depth:.2f}%), a/Rs {ar['ars']},
 inc {ar['inc']}, e {ar['ecc']}, Teff {ar['teff']}, V {ar['V']}. Epoch {n}: predicted Tmid {tmid:.5f} ({ut(tmid)} UT),
 ingress {ut(ing)}, egress {ut(egr)}; {pre_min:.0f} min pre-ingress and {post_min:.0f} min post-egress in the window

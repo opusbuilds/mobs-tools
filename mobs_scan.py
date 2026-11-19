@@ -110,6 +110,12 @@ def main():
     for name, hms in set(re.findall(r'ImageDirectory/([A-Za-z0-9\-]+?)' + yymmdd + r'(\d{6})\.FITS', html)):
         by[name].append(hms)
     cache = json.load(open(CACHE)) if os.path.exists(CACHE) else {}
+    cpath = os.environ.get('MOBS_CLOCKS') or os.path.join(ROOT, 'clocks.json')   # verified ephemerides, as mobs_night
+    try:
+        clocks = json.load(open(cpath)) if os.path.exists(cpath) else {}
+    except Exception as e:
+        print(f'  WARNING: clocks file {cpath} unreadable ({type(e).__name__}); using archive ephemerides')
+        clocks = {}
     print(f'MObs {yymmdd}: {len(by)} target names in the listing, {sum(len(v) for v in by.values())} frames')
     # The MObs night in Arizona runs until dawn, ~12:00-13:30 UT depending on season. A scan of TODAY's UT
     # date made before then sees a night still in progress: on 2026-09-13 the 09:07 UT scan showed 35 of
@@ -132,13 +138,19 @@ def main():
             lines.append(f'  {name:12s} {len(hms):3d} frames  {ut(j0)}-{ut(j1)}  {r["pl_name"]}: no ephemeris in pscomppars')
             snap.append({'target': name, 'planet': r['pl_name'], 'frames': len(hms), 'first_ut': ut(j0), 'last_ut': ut(j1), 'coverage': 'no ephemeris'})
             continue
+        perr, t0err = r['pl_orbpererr1'] or 1e-6, r['pl_tranmiderr1'] or 1e-3
+        clk = clocks.get(r['pl_name'])
+        if clk and clk.get('t0') and clk.get('period'):
+            # a verified ExoClock clock replaces the archive's linear ephemeris (WASP-10 b: 104 min apart, 2026-11-18)
+            P, T0 = float(clk['period']), float(clk['t0'])
+            perr, t0err = float(clk.get('periodErr') or perr), float(clk.get('t0Err') or t0err)
         n = round(((j0 + j1) / 2 - T0) / P)
         tmid = T0 + n * P
         dur_h = r['pl_trandur'] or 2.0
         half = dur_h / 48.0
         ing, egr = tmid - half, tmid + half
         pre, post = (ing - j0) * 1440, (j1 - egr) * 1440
-        bar = ((r['pl_tranmiderr1'] or 1e-3) + abs(n) * (r['pl_orbpererr1'] or 1e-6)) * 1440
+        bar = (t0err + abs(n) * perr) * 1440
         if egr < j0 or ing > j1:
             cov = 'NONE'
         elif ing > j0 and egr < j1:
