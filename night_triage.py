@@ -164,11 +164,12 @@ def main():
     # Alignment health (2026-11-19, HAT-P-54 b 11-12): a star-poor reference frame (40 stars against ~600 in the others)
     # gave most frames 1-2 votes and nonsense shifts, the target was measured off its position, and clear frames were
     # graded lost: a cloud verdict for a clear night. Report how many frames have untrusted shifts, so a caller can say
-    # 'alignment failed' instead of 'cloud'.
+    # 'alignment failed' instead of 'cloud'. Only when the typical frame holds a real star field (median >= 20): on a
+    # night where every frame is near-empty the reference is not the problem, the sky is.
     unaligned = sum(1 for r in rows if r[3] is None or r[4] < MIN_TRUSTED_VOTES)
     med_stars = float(np.median([r[2] for r in rows])) if rows else 0.0
     print(f'alignment: {unaligned} of {len(rows)} frames below {MIN_TRUSTED_VOTES} votes; reference frame {len(xy0)} stars, '
-          f'median frame {med_stars:.0f}' + ('  WARNING: star-poor reference frame' if len(xy0) < med_stars / 3 else ''))
+          f'median frame {med_stars:.0f}' + ('  WARNING: star-poor reference frame' if med_stars >= 20 and len(xy0) < med_stars / 3 else ''))
     grades = [grade(r[5]) for r in rows]
     print(f'target flux: clear reference {clear_ref:.0f} ADU (4 px aperture); '
           f'clear {grades.count("clear")}, partial {grades.count("partial")}, lost {grades.count("lost")}')
