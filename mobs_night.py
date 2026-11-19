@@ -384,6 +384,10 @@ def parse_triage(text):
         if m:
             g[ph] = tuple(int(v) for v in m.groups())
     g['steps'] = len(re.findall(r'^\s+\S+: \([+-]\d+, [+-]\d+\)$', text, re.M))
+    m = re.search(r'alignment: (\d+) of (\d+) frames below', text)
+    if m:
+        g['unaligned'], g['frames'] = int(m.group(1)), int(m.group(2))
+        g['ref_star_poor'] = 'WARNING: star-poor reference frame' in text
     m = re.search(r'target core: peak median (\d+) of DATAMAX (\d+) \((\d+)%\); '
                   r'clipped (\d+)/(\d+), over 90% of full well (\d+)/(\d+)', text)
     if m:
@@ -587,7 +591,12 @@ def main():
         raise SystemExit(f'  night_triage failed: {err.strip()[-300:]}')
     open(os.path.join(ddir, 'triage.txt'), 'w').write(out)
     tg = parse_triage(out)
-    say('  triage: ' + '; '.join(l for l in out.strip().splitlines() if l.startswith(('frames', 'shift', 'target flux'))))
+    say('  triage: ' + '; '.join(l for l in out.strip().splitlines() if l.startswith(('frames', 'shift', 'target flux', 'alignment'))))
+    # Alignment failure (2026-11-19, HAT-P-54 b 11-12): a star-poor reference frame and most frames unaligned. Then the
+    # frame grades, the shifts and the clear-reference flux are all unreliable: no 'lost' grade is evidence of cloud,
+    # and nothing below may act on them (set frames aside, re-reference pixels). Both conditions are needed: on a
+    # cloudy night frames are star-poor too, but the reference is not poorer than they are.
+    align_failed = bool(tg.get('frames') and tg.get('ref_star_poor') and tg.get('unaligned', 0) / tg['frames'] > 0.5)
     # The seed floor is measured on the seed frame; say what it would be on the clearest frames, so a
     # verdict on a target AT the floor (WASP-52 09-13: 197 ADU in a 76%-transmission frame 1, ~260 clear)
     # is read as one, and a target UNDER it only by cloud is not mistaken for a faint one.
@@ -630,7 +639,7 @@ def main():
         if m:
             num = lambda v: float(v) if v != '?' else None
             rows.append((m.group(1), num(m.group(2)), num(m.group(3)), num(m.group(4)), m.group(5)))
-    if above < SEED_MIN_ADU and seed_clear is not None and seed_clear >= SEED_MIN_ADU:
+    if not align_failed and above < SEED_MIN_ADU and seed_clear is not None and seed_clear >= SEED_MIN_ADU:
         lead = 0
         while lead < len(rows) - 1 and rows[lead][4] == 'lost':
             lead += 1
@@ -790,7 +799,9 @@ def main():
     reasons = []
     if above < SEED_MIN_ADU:
         r = f'seed target {above:.0f} ADU above background (< {SEED_MIN_ADU})'
-        if seed_clear is not None and seed_clear >= SEED_MIN_ADU:
+        if align_failed:
+            pass   # the clear-reference flux is built from misaligned frames: no estimate, no --force advice
+        elif seed_clear is not None and seed_clear >= SEED_MIN_ADU:
             r += f'; ~{seed_clear:.0f} on the clearest frames, so the seed frame is the problem, not the target'
             # TOI-2570 b 2026-09-25: this line said '--force is reasonable' unconditionally. Forced,
             # a 1.25% transit at scatter/depth ~0.9 came back +29 min late and twice too deep with a
@@ -804,9 +815,14 @@ def main():
         elif seed_clear is not None:
             r += f'; ~{seed_clear:.0f} on the clearest frames'
         reasons.append(r)
-    if 'in' in tg and tg['in'][0] and tg['in'][3] / tg['in'][0] > 0.5:
+    # Both conditions: on a cloudy night frames are star-poor too and fail to align, and that IS cloud; only a
+    # reference frame much poorer than the typical frame marks the failure as the alignment's own.
+    if align_failed:
+        # most frames could not be aligned to the reference: their 'lost' grades are not evidence of cloud
+        reasons.append(f'alignment failed for {tg["unaligned"]}/{tg["frames"]} frames (frame grades unreliable, so cloud cannot be judged; triage needs a star-richer reference frame)')
+    elif 'in' in tg and tg['in'][0] and tg['in'][3] / tg['in'][0] > 0.5:
         reasons.append(f'in-transit frames lost {tg["in"][3]}/{tg["in"][0]}')
-    if 'in' in tg and (tg['in'][1] + tg['in'][2]) < 10:
+    if not align_failed and 'in' in tg and (tg['in'][1] + tg['in'][2]) < 10:
         reasons.append(f'only {tg["in"][1] + tg["in"][2]} usable in-transit frames')
     if not in_range:
         reasons.append(f'no comparison within {lo}-{hi}x of the target')
