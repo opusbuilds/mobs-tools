@@ -40,7 +40,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 # otherwise the current directory (an installed copy must never write into its install prefix).
 ROOT = os.environ.get('MOBS_ROOT') or (os.path.dirname(HERE) if os.path.basename(HERE) == 'tools' else os.getcwd())
 sys.path.insert(0, HERE)
-from night_triage import frame_time, detect, voted_shift  # noqa: E402
+from night_triage import frame_time, detect, voted_shift, MIN_TRUSTED_VOTES  # noqa: E402
 
 # Exit codes: 0 PROCEED, 3 a deliberate REJECT (the data cannot support a timing: too faint, star-poor, no transit in
 # the window), 1 an error (archive down, plate solve failed, crash). Until 2026-11-10 a REJECT exited 1 like a crash,
@@ -338,17 +338,25 @@ def twilight_run(ddir, ordered, loc, need_bright=True):
 
 
 def first_seedable_frame(ddir, files):
-    """(index of the first frame with at least MIN_SEED_STARS detections, per-frame star counts).
+    """(index of the first night-dark frame with enough stars to seed from and vote against, per-frame star counts).
 
     The index is None when no frame qualifies: a night with 0-2 stars in every
     frame (TrES-5 2026-09-10) is a verdict, not a plate-solving problem.
     """
-    counts, first = [], None
-    for i, f in enumerate(files):
+    counts = []
+    for f in files:
         _, med, xy, _ = detect(os.path.join(ddir, f), 4.0, 8.0)
         counts.append((len(xy), med))
-        if first is None and med <= TWILIGHT_SKY and len(xy) >= MIN_SEED_STARS:
-            first = i
+    # The seed frame is also the triage's REFERENCE frame, which every other frame votes its shift against.
+    # A frame far poorer in stars than the night's typical one cannot be that (2026-11-19, HAT-P-54 b 11-12:
+    # frame 1 had 40 stars against a median of 608, 72 of 73 frames failed to align, and a clear night was graded
+    # cloud). So on a night with a real star field (median >= 20 among night-dark frames) a seed also needs a third
+    # of that median. A night where every frame is near-empty keeps the absolute floor alone: there the sky, not
+    # the reference, is the problem.
+    dark = [n for n, med in counts if med <= TWILIGHT_SKY]
+    typical = float(np.median(dark)) if dark else 0.0
+    need = max(MIN_SEED_STARS, typical / 3 if typical >= 20 else 0)
+    first = next((i for i, (n, med) in enumerate(counts) if med <= TWILIGHT_SKY and n >= need), None)
     return first, counts
 
 
@@ -550,8 +558,11 @@ def main():
             f'transit window {ut(ing)}-{ut(egr)} UT inside a {ut(jd0)}-{ut(jd1)} night')
         raise SystemExit(REJECT_EXIT)
     if start:
-        say(f'  first {start} frame(s) have fewer than {MIN_SEED_STARS} stars on a night-dark sky (cloud or an empty field); '
-            f'seeding from frame {start + 1} ({files[start]}) and grading them in the triage')
+        dark_n = [n for n, med in counts if med <= TWILIGHT_SKY]
+        say(f'  first {start} frame(s) cannot seed ({", ".join(str(c[0]) for c in counts[:start][:8])}{" .." if start > 8 else ""} stars; '
+            f'a seed needs a sky at most {TWILIGHT_SKY} ADU and {MIN_SEED_STARS} stars, or a third of the night-dark median of '
+            f'{np.median(dark_n):.0f} when that is 20 or more); seeding from frame {start + 1} ({files[start]}, '
+            f'{counts[start][0]} stars) and grading them in the triage')
     loc, solved_on = None, None
     for i in range(start, min(start + 6, len(files))):
         rc, out, err = run_tool('locate_target.py', [os.path.join(ddir, files[i]), '--ra', str(ar['ra']), '--dec', str(ar['dec']), '--json', '--comps', '60'])
@@ -561,24 +572,29 @@ def main():
     if loc is None:
         raise SystemExit(f'  no frame among {start + 1}-{min(start + 6, len(files))} would plate-solve; last error: {err.strip()[-200:]}')
     tx, ty = loc['target']['x'], loc['target']['y']
-    ref_frame = 0
-    if solved_on:
-        _, _, xy0, fl0 = detect(first, 4.0, 8.0)
+    # The pixel lives on the seed frame (files[start]), which is also the triage's reference. If a later frame was the
+    # one that solved, carry the pixel back to the seed by the star-pair vote; never further back than the seed (until
+    # 2026-11-19 it went to frame 1, which the seed rule may just have refused as star-poor).
+    ref_frame = start
+    if solved_on > start:
+        _, _, xy0, fl0 = detect(os.path.join(ddir, files[start]), 4.0, 8.0)
         _, _, xyi, fli = detect(os.path.join(ddir, files[solved_on]), 4.0, 8.0)
         ref = xy0[np.argsort(fl0)[::-1][:25]] if len(xy0) else xy0
         cur = xyi[np.argsort(fli)[::-1][:25]] if len(xyi) else xyi
         sh, votes = voted_shift(cur, ref)
-        if sh is None:
-            # Frame 1 cannot be aligned (too few stars). Keep the pixel on the solved
-            # frame, triage relative to it, and set the unseedable leading frames aside
-            # AFTER the triage so they are counted as lost rather than hidden.
+        # A shift on fewer votes than the triage itself trusts is not an alignment (2026-11-19, HAT-P-54 b 11-12:
+        # frame 1 'aligned' to frame 2 on 2 votes, the pixel was carried back to a 40-star frame 1, and the triage
+        # then voted every frame against it). Treat it like no alignment at all.
+        if sh is None or votes < MIN_TRUSTED_VOTES:
+            # Keep the pixel on the solved frame, triage relative to it, and set the leading frames aside AFTER the
+            # triage so they are graded there rather than hidden.
             ref_frame = solved_on
-            say(f'  frame 1 could not be aligned to frame {solved_on + 1} (votes {votes}); the pixel refers to frame {solved_on + 1}')
+            say(f'  frame {start + 1} could not be aligned to frame {solved_on + 1} (votes {votes}); the pixel refers to frame {solved_on + 1}')
         else:
             tx, ty = tx - float(sh[0]), ty - float(sh[1])
             for c in loc['comparisons']:
                 c['x'], c['y'] = c['x'] - float(sh[0]), c['y'] - float(sh[1])
-            say(f'  frame 1 did not solve; solved frame {solved_on + 1} ({files[solved_on]}) and carried the pixel back by ({-sh[0]:+.1f}, {-sh[1]:+.1f}) on {votes} votes')
+            say(f'  frame {start + 1} did not solve; solved frame {solved_on + 1} ({files[solved_on]}) and carried the pixel back by ({-sh[0]:+.1f}, {-sh[1]:+.1f}) on {votes} votes')
     seed_file = os.path.join(ddir, files[ref_frame])
     above, bg = seed_above_bg(seed_file, tx, ty)
     say(f'  target in frame {ref_frame + 1}: ({tx:.1f}, {ty:.1f}), {above:.0f} ADU above a {bg:.0f} background'
@@ -620,7 +636,8 @@ def main():
         os.makedirs(os.path.join(ddir, 'excluded'), exist_ok=True)
         for f in files[:ref_frame]:
             shutil.move(os.path.join(ddir, f), os.path.join(ddir, 'excluded', f))
-        say(f'  set aside the {ref_frame} leading star-poor frame(s) to excluded/ for seeding only; they are counted above as lost')
+        say(f'  set aside the {ref_frame} frame(s) before the reference frame to excluded/ (too few stars or too bright a sky '
+            f'to seed from, or unsolved and unalignable); they are graded in the triage above')
         files = files[ref_frame:]
 
     # Leading clouded frames (2026-09-14, Qatar-1 09-14): frame 1 had 33 stars, so it
@@ -639,6 +656,9 @@ def main():
         if m:
             num = lambda v: float(v) if v != '?' else None
             rows.append((m.group(1), num(m.group(2)), num(m.group(3)), num(m.group(4)), m.group(5)))
+    # Frames already set aside above are graded in the table but are no longer in the directory; nothing below may
+    # pick one (the brightest-frame read opens it by name; the leading-lost scan must start at the reference frame).
+    rows = [r for r in rows if r[0] in files]
     if not align_failed and above < SEED_MIN_ADU and seed_clear is not None and seed_clear >= SEED_MIN_ADU:
         lead = 0
         while lead < len(rows) - 1 and rows[lead][4] == 'lost':
