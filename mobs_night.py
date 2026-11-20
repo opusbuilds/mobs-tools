@@ -75,7 +75,7 @@ CAL_SLOPE = 0.05   # percent scatter per magnitude, from the three points above
 CAL_BAR_SCALE = 0.63
 CAL_BAR_SPREAD = 1.8
 SAT_ADU = 4095      # MObs frames are 12-bit
-SAT_FRAC = 0.8      # refuse comparisons whose clearest-frame peak reaches 80% of saturation (seeing varies frame to frame)
+SAT_FRAC = 0.8      # refuse comparisons whose peak (max raw pixel over up to 25 frames, step 6) reaches 80% of saturation
 CAL_V_KNEE = 12.6  # beyond this the target approaches the 200 ADU floor and photon
                    # noise takes over: HAT-P-54 b (V 13.40, ~60 ADU) gave another
                    # observer 2.6% scatter and a 24 min bar, not the flat law's 0.93%.
